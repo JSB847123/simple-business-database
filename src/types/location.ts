@@ -7,6 +7,7 @@ export interface Photo {
 export interface Floor {
   id: string;
   floorName: string;
+  customFloorName?: string; // "기타" 선택 시 사용자가 입력하는 층 이름
   floorInfo: string;
   photos: Photo[];
   isCompleted?: boolean; // 층별 완료 상태
@@ -38,5 +39,5 @@ export const LOCATION_TYPES = [
 ];
 
 export const FLOOR_OPTIONS = [
-  'B3', 'B2', 'B1', '1층', '2층', '3층', '4층', '5층', '6층', '7층', '8층', '9층', '10층'
+  'B3', 'B2', 'B1', '1층', '2층', '3층', '4층', '5층', '6층', '7층', '8층', '9층', '10층', '기타'
 ];

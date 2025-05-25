@@ -294,11 +294,15 @@ const generateDocumentContent = async (locations: Location[]) => {
       );
 
       for (const floor of location.floors) {
+        const displayFloorName = floor.floorName === '기타' && floor.customFloorName 
+          ? floor.customFloorName 
+          : floor.floorName;
+          
         children.push(
           new Paragraph({
             children: [
               new TextRun({
-                text: `${floor.floorName}`,
+                text: `${displayFloorName}`,
                 size: 18,
                 bold: true,
               }),

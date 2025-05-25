@@ -42,6 +42,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
   const createNewFloor = (): Floor => ({
     id: generateId(),
     floorName: '1층',
+    customFloorName: '',
     floorInfo: '',
     photos: [],
     isCompleted: false
@@ -101,6 +102,17 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     const floor = formData.floors.find(f => f.id === floorId);
     if (!floor) return;
 
+    // "기타" 층의 경우 커스텀 층 이름 입력 확인
+    if (floor.floorName === '기타' && !floor.customFloorName?.trim()) {
+      toast({
+        title: "입력 확인",
+        description: "기타 층을 선택한 경우 층 이름을 입력해주세요.",
+        variant: "destructive",
+        duration: 300
+      });
+      return;
+    }
+
     // 최소 정보 입력 확인
     if (!floor.floorInfo.trim() && floor.photos.length === 0) {
       toast({
@@ -112,10 +124,14 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       return;
     }
 
+    const displayName = floor.floorName === '기타' && floor.customFloorName 
+      ? floor.customFloorName 
+      : floor.floorName;
+
     handleFloorChange(floorId, 'isCompleted', true);
     toast({
       title: "층 정보 완료",
-      description: `${floor.floorName} 정보가 저장되었습니다.`,
+      description: `${displayName} 정보가 저장되었습니다.`,
       duration: 300
     });
   };
@@ -369,6 +385,20 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                     <option key={option} value={option}>{option}</option>
                   ))}
                 </select>
+                
+                {/* "기타" 선택 시 커스텀 층 이름 입력 */}
+                {floor.floorName === '기타' && (
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      value={floor.customFloorName || ''}
+                      onChange={(e) => handleFloorChange(floor.id, 'customFloorName', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                      placeholder="층 이름을 입력하세요 (예: 옥상, 지하 4층, 중층 등)"
+                      disabled={floor.isCompleted}
+                    />
+                  </div>
+                )}
               </div>
 
               <div>
