@@ -423,6 +423,18 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         className="hidden"
                       />
                     </label>
+                    <label className="flex items-center justify-center gap-2 border-2 border-solid border-teal-500 bg-teal-50 rounded-lg p-3 hover:bg-teal-100 cursor-pointer touch-target min-w-[100px]">
+                      <Camera className="h-5 w-5 text-teal-600" />
+                      <span className="text-sm text-teal-700 font-medium">카메라</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        multiple
+                        onChange={(e) => e.target.files && handlePhotoUpload(floor.id, e.target.files)}
+                        className="hidden"
+                      />
+                    </label>
                   </div>
                 )}
               </div>
