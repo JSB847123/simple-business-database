@@ -94,6 +94,27 @@ export const generateReport = async (locations: Location[]): Promise<void> => {
   }
 };
 
+export const generateReportForEmail = async (locations: Location[]): Promise<{ blob: Blob; fileName: string }> => {
+  try {
+    const doc = new Document({
+      sections: [
+        {
+          properties: {},
+          children: await generateDocumentContent(locations),
+        },
+      ],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const fileName = `출장_데이터_수집_보고서_${new Date().toISOString().split('T')[0]}.docx`;
+    
+    return { blob, fileName };
+  } catch (error) {
+    console.error('Error generating report for email:', error);
+    throw new Error('메일용 보고서 생성 중 오류가 발생했습니다.');
+  }
+};
+
 // Helper function to get image dimensions and maintain aspect ratio
 const getImageDimensionsWithAspectRatio = (imageData: string): Promise<{ width: number; height: number }> => {
   return new Promise((resolve, reject) => {

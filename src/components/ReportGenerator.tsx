@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Download, FileText, Smartphone } from 'lucide-react';
+import { ArrowLeft, Download, FileText, Smartphone, Mail } from 'lucide-react';
 import { Location } from '../types/location';
-import { generateReport } from '../utils/reportGenerator';
+import { generateReport, generateReportForEmail } from '../utils/reportGenerator';
+import { openEmailWithAttachment, supportsWebShare } from '../utils/emailUtils';
 import { useToast } from '../hooks/use-toast';
 
 interface ReportGeneratorProps {
@@ -11,6 +12,7 @@ interface ReportGeneratorProps {
 
 const ReportGenerator: React.FC<ReportGeneratorProps> = ({ locations, onBack }) => {
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   const { toast } = useToast();
 
   // Mobile detection
@@ -54,6 +56,44 @@ const ReportGenerator: React.FC<ReportGeneratorProps> = ({ locations, onBack }) 
     }
   };
 
+  const handleSendEmail = async () => {
+    if (locations.length === 0) {
+      toast({
+        title: "메일 전송 불가",
+        description: "저장된 장소 데이터가 없습니다.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      const { blob, fileName } = await generateReportForEmail(locations);
+      await openEmailWithAttachment(blob, fileName);
+      
+      if (supportsWebShare()) {
+        toast({
+          title: "메일 전송 준비 완료",
+          description: "공유 메뉴에서 메일 앱을 선택해주세요.",
+        });
+      } else {
+        toast({
+          title: "메일 앱 열기 완료",
+          description: "파일이 다운로드되고 메일 앱이 열렸습니다. 다운로드된 파일을 첨부해주세요.",
+        });
+      }
+    } catch (error) {
+      console.error('Email sending error:', error);
+      toast({
+        title: "메일 전송 실패",
+        description: error instanceof Error ? error.message : "메일 전송 중 오류가 발생했습니다.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
+
   const getTotalPhotos = (): number => {
     return locations.reduce((total, location) => {
       return total + location.floors.reduce((floorTotal, floor) => floorTotal + floor.photos.length, 0);
@@ -91,6 +131,7 @@ const ReportGenerator: React.FC<ReportGeneratorProps> = ({ locations, onBack }) 
                 <p className="text-xs text-blue-700">
                   • 파일이 다운로드되지 않으면 브라우저 설정에서 다운로드를 허용해주세요<br/>
                   • iOS Safari의 경우 파일 앱에서 다운로드된 파일을 확인할 수 있습니다<br/>
+                  • 메일 전송 버튼을 누르면 공유 메뉴가 열리며 메일 앱을 선택할 수 있습니다<br/>
                   • 다운로드가 안 되면 브라우저를 새로고침 후 다시 시도해주세요
                 </p>
               </div>
@@ -163,11 +204,20 @@ const ReportGenerator: React.FC<ReportGeneratorProps> = ({ locations, onBack }) 
         <div className="space-y-3">
           <button
             onClick={handleGenerateReport}
-            disabled={isGenerating || locations.length === 0}
+            disabled={isGenerating || isSendingEmail || locations.length === 0}
             className="w-full flex items-center justify-center gap-2 bg-teal-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-teal-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
           >
             <Download className="h-5 w-5" />
             {isGenerating ? '보고서 생성 중...' : 'docx(word) 생성'}
+          </button>
+          
+          <button
+            onClick={handleSendEmail}
+            disabled={isGenerating || isSendingEmail || locations.length === 0}
+            className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          >
+            <Mail className="h-5 w-5" />
+            {isSendingEmail ? '메일 준비 중...' : 'mail 전송'}
           </button>
         </div>
 
