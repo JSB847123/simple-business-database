@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, X, Wifi, WifiOff, RotateCcw } from 'lucide-react';
+import { Download, X, WifiOff, RotateCcw } from 'lucide-react';
 import { usePWA } from '../hooks/usePWA';
 import { useToast } from '../hooks/use-toast';
 
@@ -54,15 +54,7 @@ const PWAInstallPrompt: React.FC = () => {
         </div>
       )}
 
-      {/* 온라인 복구 알림 */}
-      {isOnline && (
-        <div className="fixed top-0 left-0 right-0 bg-green-500 text-white text-center py-1 px-4 text-sm font-medium z-50 transition-all duration-300">
-          <div className="flex items-center justify-center gap-2">
-            <Wifi className="h-4 w-4" />
-            온라인 연결됨
-          </div>
-        </div>
-      )}
+
 
       {/* PWA 설치 프롬프트 */}
       {showInstallPrompt && (
