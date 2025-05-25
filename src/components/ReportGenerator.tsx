@@ -33,17 +33,10 @@ const ReportGenerator: React.FC<ReportGeneratorProps> = ({ locations, onBack }) 
     setIsGenerating(true);
     try {
       await generateReport(locations);
-      if (isMobile()) {
-        toast({
-          title: "보고서 생성 완료",
-          description: "다운로드 폴더를 확인해주세요. 파일이 다운로드되지 않으면 브라우저 설정을 확인해주세요.",
-        });
-      } else {
-        toast({
-          title: "보고서 생성 완료",
-          description: "DOCX 파일이 다운로드되었습니다.",
-        });
-      }
+      toast({
+        title: "보고서 생성 완료",
+        description: "다운로드가 정상적으로 되었는지 반드시 확인하세요.",
+      });
     } catch (error) {
       console.error('Report generation error:', error);
       toast({

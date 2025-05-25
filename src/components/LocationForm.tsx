@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Plus, Trash2, Camera, Check, Edit } from 'lucide-react';
 import { Location, Floor, Photo, LOCATION_TYPES, FLOOR_OPTIONS } from '../types/location';
 import { generateId } from '../utils/storage';
@@ -22,6 +22,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     timestamp: Date.now()
   });
   const { toast } = useToast();
+  const floorRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
   useEffect(() => {
     if (location) {
@@ -48,11 +49,25 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     isCompleted: false
   });
 
+  const scrollToFloor = (floorId: string) => {
+    setTimeout(() => {
+      const floorElement = floorRefs.current[floorId];
+      if (floorElement) {
+        floorElement.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center'
+        });
+      }
+    }, 100);
+  };
+
   const handleAddFloor = () => {
+    const newFloor = createNewFloor();
     setFormData({
       ...formData,
-      floors: [...formData.floors, createNewFloor()]
+      floors: [...formData.floors, newFloor]
     });
+    scrollToFloor(newFloor.id);
   };
 
   const handleAddFloorAfter = (afterIndex: number) => {
@@ -64,6 +79,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       ...formData,
       floors: newFloors
     });
+    
+    scrollToFloor(newFloor.id);
     
     toast({
       title: "층 추가 완료",
@@ -325,11 +342,15 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           </div>
 
           {formData.floors.map((floor, index) => (
-            <div key={floor.id} className={`border rounded-lg p-4 space-y-4 ${
-              floor.isCompleted 
-                ? 'border-green-200 bg-green-50' 
-                : 'border-gray-200 bg-white'
-            }`}>
+            <div 
+              key={floor.id} 
+              ref={(el) => floorRefs.current[floor.id] = el}
+              className={`border rounded-lg p-4 space-y-4 ${
+                floor.isCompleted 
+                  ? 'border-green-200 bg-green-50' 
+                  : 'border-gray-200 bg-white'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <h4 className="font-medium text-gray-900">층 정보 #{index + 1}</h4>
