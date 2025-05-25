@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Download, FileText, Smartphone, Mail } from 'lucide-react';
+import { ArrowLeft, Download, FileText, Smartphone, Mail, List } from 'lucide-react';
 import { Location } from '../types/location';
 import { generateReport, generateReportForEmail } from '../utils/reportGenerator';
 import { openEmailWithAttachment, supportsWebShare } from '../utils/emailUtils';
@@ -69,19 +69,23 @@ const ReportGenerator: React.FC<ReportGeneratorProps> = ({ locations, onBack }) 
     setIsSendingEmail(true);
     try {
       const { blob, fileName } = await generateReportForEmail(locations);
-      await openEmailWithAttachment(blob, fileName);
+      const result = await openEmailWithAttachment(blob, fileName);
       
-      if (supportsWebShare()) {
-        toast({
-          title: "메일 전송 준비 완료",
-          description: "공유 메뉴에서 메일 앱을 선택해주세요.",
-        });
-      } else {
-        toast({
-          title: "메일 앱 열기 완료",
-          description: "파일이 다운로드되고 메일 앱이 열렸습니다. 다운로드된 파일을 첨부해주세요.",
-        });
+      // Only show success message if not cancelled
+      if (result.success) {
+        if (supportsWebShare()) {
+          toast({
+            title: "메일 전송 준비 완료",
+            description: "공유 메뉴에서 메일 앱을 선택해주세요.",
+          });
+        } else {
+          toast({
+            title: "메일 앱 열기 완료",
+            description: "파일이 다운로드되고 메일 앱이 열렸습니다. 다운로드된 파일을 첨부해주세요.",
+          });
+        }
       }
+      // Don't show any message if cancelled (result.cancelled === true)
     } catch (error) {
       console.error('Email sending error:', error);
       toast({
@@ -202,6 +206,14 @@ const ReportGenerator: React.FC<ReportGeneratorProps> = ({ locations, onBack }) 
 
         {/* Actions */}
         <div className="space-y-3">
+          <button
+            onClick={onBack}
+            className="w-full flex items-center justify-center gap-2 bg-gray-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-gray-700 transition-colors"
+          >
+            <List className="h-5 w-5" />
+            장소 목록
+          </button>
+          
           <button
             onClick={handleGenerateReport}
             disabled={isGenerating || isSendingEmail || locations.length === 0}

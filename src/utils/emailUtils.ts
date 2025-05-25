@@ -1,18 +1,26 @@
 // Email utility functions for sending reports
 
-export const openEmailWithAttachment = async (blob: Blob, fileName: string): Promise<void> => {
+export const openEmailWithAttachment = async (blob: Blob, fileName: string): Promise<{ success: boolean; cancelled?: boolean }> => {
   try {
     // Create a File object from the blob
     const file = new File([blob], fileName, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     
     // Check if the Web Share API is available (mainly for mobile)
     if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({
-        title: '출장 데이터 수집 보고서',
-        text: '출장 중 수집한 데이터 보고서입니다.',
-        files: [file]
-      });
-      return;
+      try {
+        await navigator.share({
+          title: '출장 데이터 수집 보고서',
+          text: '출장 중 수집한 데이터 보고서입니다.',
+          files: [file]
+        });
+        return { success: true };
+      } catch (shareError: any) {
+        // Check if user cancelled the share
+        if (shareError.name === 'AbortError' || shareError.message.includes('cancel')) {
+          return { success: false, cancelled: true };
+        }
+        throw shareError;
+      }
     }
 
     // Fallback: Create mailto link with attachment info
@@ -46,6 +54,8 @@ export const openEmailWithAttachment = async (blob: Blob, fileName: string): Pro
       window.location.href = mailtoUrl;
       URL.revokeObjectURL(url);
     }, 500);
+    
+    return { success: true };
     
   } catch (error) {
     console.error('Error opening email with attachment:', error);
