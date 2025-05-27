@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { PlusCircle, MapPin, FileText, Camera } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { PlusCircle, MapPin, FileText, Camera, Settings } from 'lucide-react';
 import LocationForm from '../components/LocationForm';
 import LocationList from '../components/LocationList';
 import ReportGenerator from '../components/ReportGenerator';
 import PWAInstallPrompt from '../components/PWAInstallPrompt';
+import SettingsModal from '../components/SettingsModal';
 import { Location } from '../types/location';
-import { loadLocations, saveLocations, syncStorageData } from '../utils/storage';
+import { AppSettings } from '../types/location';
+import { loadLocations, saveLocations, syncStorageData, loadSettings, saveSettings } from '../utils/storage';
 import { useToast } from '../hooks/use-toast';
 
 const Index = () => {
@@ -13,7 +15,57 @@ const Index = () => {
   const [locations, setLocations] = useState<Location[]>([]);
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [settings, setSettings] = useState<AppSettings>(loadSettings());
+  const [showSettings, setShowSettings] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const autoSaveIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
+
+  // 자동저장 설정
+  useEffect(() => {
+    if (settings.autoSaveEnabled && hasUnsavedChanges) {
+      autoSaveIntervalRef.current = setInterval(() => {
+        handleAutoSave();
+      }, settings.autoSaveInterval * 1000);
+    } else {
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+        autoSaveIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+      }
+    };
+  }, [settings.autoSaveEnabled, settings.autoSaveInterval, hasUnsavedChanges]);
+
+  const handleAutoSave = async () => {
+    if (hasUnsavedChanges && locations.length > 0) {
+      try {
+        await saveLocations(locations);
+        setHasUnsavedChanges(false);
+        toast({
+          title: "자동 저장 완료",
+          description: "데이터가 자동으로 저장되었습니다.",
+          duration: 1000
+        });
+      } catch (error) {
+        console.error('Auto save failed:', error);
+      }
+    }
+  };
+
+  const handleSettingsChange = (newSettings: AppSettings) => {
+    setSettings(newSettings);
+    saveSettings(newSettings);
+    setShowSettings(false);
+    toast({
+      title: "설정 저장 완료",
+      description: `자동저장이 ${newSettings.autoSaveEnabled ? '활성화' : '비활성화'}되었습니다.`,
+    });
+  };
 
   useEffect(() => {
     const initializeData = async () => {
@@ -49,22 +101,32 @@ const Index = () => {
       
       if (editingLocation) {
         updatedLocations = locations.map(loc => 
-          loc.id === editingLocation.id ? location : loc
+          loc.id === editingLocation.id ? { ...location, lastSaved: Date.now() } : loc
         );
         toast({
           title: "수정 완료",
           description: "장소 정보가 성공적으로 수정되었습니다.",
         });
       } else {
-        updatedLocations = [...locations, location];
+        // 새로운 위치를 맨 앞에 추가 (최근 저장 순)
+        updatedLocations = [{ ...location, lastSaved: Date.now() }, ...locations];
         toast({
           title: "저장 완료",
           description: "새로운 장소 정보가 저장되었습니다.",
         });
       }
       
+      // 최근 저장 순으로 정렬
+      updatedLocations.sort((a, b) => (b.lastSaved || b.timestamp) - (a.lastSaved || a.timestamp));
+      
       setLocations(updatedLocations);
-      await saveLocations(updatedLocations);
+      
+      if (!settings.autoSaveEnabled) {
+        await saveLocations(updatedLocations);
+      } else {
+        setHasUnsavedChanges(true);
+      }
+      
       setCurrentView('list');
       setEditingLocation(null);
     } catch (error) {
@@ -161,15 +223,26 @@ const Index = () => {
               <MapPin className="h-6 w-6 text-teal-600" />
               <h1 className="text-xl font-bold text-gray-800">출장 데이터 수집</h1>
             </div>
-            {currentView === 'list' && !isLoading && (
-              <button
-                onClick={handleNewLocation}
-                className="flex items-center gap-1 bg-teal-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors touch-target"
-              >
-                <PlusCircle className="h-4 w-4" />
-                새 장소
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {currentView === 'list' && !isLoading && (
+                <>
+                  <button
+                    onClick={() => setShowSettings(true)}
+                    className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg touch-target"
+                    title="설정"
+                  >
+                    <Settings className="h-5 w-5" />
+                  </button>
+                  <button
+                    onClick={handleNewLocation}
+                    className="flex items-center gap-1 bg-teal-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors touch-target"
+                  >
+                    <PlusCircle className="h-4 w-4" />
+                    새 장소
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -225,6 +298,14 @@ const Index = () => {
           </button>
         </div>
       )}
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={showSettings}
+        settings={settings}
+        onSave={handleSettingsChange}
+        onClose={() => setShowSettings(false)}
+      />
     </div>
   );
 };

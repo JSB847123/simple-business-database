@@ -1,9 +1,17 @@
 import { Location } from '../types/location';
+import { AppSettings } from '../types/location';
 
 const STORAGE_KEY = 'fieldReportLocations';
+const SETTINGS_KEY = 'fieldReportSettings';
 const DB_NAME = 'FieldReportDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'locations';
+
+// 기본 설정
+const DEFAULT_SETTINGS: AppSettings = {
+  autoSaveEnabled: false,
+  autoSaveInterval: 3
+};
 
 // IndexedDB 초기화
 const initDB = (): Promise<IDBDatabase> => {
@@ -158,4 +166,25 @@ export const formatTimestamp = (timestamp: number): string => {
     hour: '2-digit',
     minute: '2-digit'
   });
+};
+
+// 설정 관련 함수들
+export const loadSettings = (): AppSettings => {
+  try {
+    const saved = localStorage.getItem(SETTINGS_KEY);
+    if (saved) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+    }
+  } catch (error) {
+    console.error('Error loading settings:', error);
+  }
+  return DEFAULT_SETTINGS;
+};
+
+export const saveSettings = (settings: AppSettings): void => {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (error) {
+    console.error('Error saving settings:', error);
+  }
 };

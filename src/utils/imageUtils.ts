@@ -1,28 +1,53 @@
-
-export const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.8): Promise<string> => {
+export const compressImage = (file: File, maxWidth: number = 1200, quality: number = 0.7): Promise<string> => {
   return new Promise((resolve, reject) => {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const img = new Image();
 
     img.onload = () => {
-      // Calculate new dimensions
-      let { width, height } = img;
-      if (width > maxWidth) {
-        height = (height * maxWidth) / width;
-        width = maxWidth;
+      try {
+        // Calculate new dimensions
+        let { width, height } = img;
+        
+        // 더 효율적인 크기 조정
+        const maxDimension = Math.max(width, height);
+        if (maxDimension > maxWidth) {
+          const ratio = maxWidth / maxDimension;
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        // 고품질 렌더링 설정
+        if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          
+          // Draw and compress
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // 압축된 이미지 생성
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+          
+          // 메모리 정리
+          URL.revokeObjectURL(img.src);
+          
+          resolve(compressedDataUrl);
+        } else {
+          reject(new Error('Canvas context not available'));
+        }
+      } catch (error) {
+        reject(error);
       }
-
-      canvas.width = width;
-      canvas.height = height;
-
-      // Draw and compress
-      ctx!.drawImage(img, 0, 0, width, height);
-      const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve(compressedDataUrl);
     };
 
-    img.onerror = reject;
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src);
+      reject(new Error('Failed to load image'));
+    };
+    
     img.src = URL.createObjectURL(file);
   });
 };
@@ -39,4 +64,23 @@ export const dataURLtoFile = (dataURL: string, filename: string): File => {
   }
   
   return new File([u8arr], filename, { type: mime });
+};
+
+// 이미지 크기 체크 함수
+export const checkImageSize = (dataURL: string): number => {
+  // Base64 문자열의 크기를 바이트로 계산
+  const base64Length = dataURL.split(',')[1].length;
+  return Math.round((base64Length * 3) / 4); // Base64 디코딩 후 실제 크기
+};
+
+// 메모리 사용량 모니터링
+export const getMemoryUsage = (): { used: number; total: number } | null => {
+  if ('memory' in performance) {
+    const memory = (performance as any).memory;
+    return {
+      used: memory.usedJSHeapSize,
+      total: memory.totalJSHeapSize
+    };
+  }
+  return null;
 };

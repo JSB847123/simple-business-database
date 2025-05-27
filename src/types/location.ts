@@ -2,6 +2,7 @@ export interface Photo {
   id: string;
   data: string; // Base64 encoded image data
   name: string;
+  timestamp?: number; // 사진 업로드 시간
 }
 
 export interface Floor {
@@ -25,6 +26,12 @@ export interface Location {
   floors: Floor[];
   notes?: string;
   timestamp: number;
+  lastSaved?: number; // 마지막 저장 시간
+}
+
+export interface AppSettings {
+  autoSaveEnabled: boolean;
+  autoSaveInterval: number; // 초 단위
 }
 
 export const LOCATION_TYPES = [

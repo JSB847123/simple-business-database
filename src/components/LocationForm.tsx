@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Plus, Trash2, Camera, Check, Edit } from 'lucide-react';
 import { Location, Floor, Photo, LOCATION_TYPES, FLOOR_OPTIONS } from '../types/location';
 import { generateId } from '../utils/storage';
-import { compressImage } from '../utils/imageUtils';
+import { compressImage, checkImageSize, getMemoryUsage } from '../utils/imageUtils';
 import { useToast } from '../hooks/use-toast';
 
 interface LocationFormProps {
@@ -166,28 +166,68 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     const floor = formData.floors.find(f => f.id === floorId);
     if (!floor) return;
 
-    if (floor.photos.length + files.length > 3) {
+    if (floor.photos.length + files.length > 5) {
       toast({
         title: "업로드 제한",
-        description: "층당 최대 3장의 사진만 업로드할 수 있습니다.",
+        description: "층당 최대 5장의 사진만 업로드할 수 있습니다.",
         variant: "destructive",
         duration: 300
       });
       return;
     }
 
+    // 메모리 사용량 체크
+    const memoryInfo = getMemoryUsage();
+    if (memoryInfo && memoryInfo.used > memoryInfo.total * 0.8) {
+      toast({
+        title: "메모리 부족",
+        description: "메모리 사용량이 높습니다. 일부 사진을 삭제하거나 앱을 재시작해주세요.",
+        variant: "destructive",
+        duration: 5000
+      });
+      return;
+    }
+
     const newPhotos: Photo[] = [];
+    let totalSize = 0;
     
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file.type.startsWith('image/')) continue;
       
+      // 파일 크기 체크 (10MB 제한)
+      if (file.size > 10 * 1024 * 1024) {
+        toast({
+          title: "파일 크기 초과",
+          description: `${file.name}은(는) 10MB를 초과합니다.`,
+          variant: "destructive",
+          duration: 3000
+        });
+        continue;
+      }
+      
       try {
         const compressedData = await compressImage(file);
+        const imageSize = checkImageSize(compressedData);
+        
+        // 압축된 이미지 크기 체크 (2MB 제한)
+        if (imageSize > 2 * 1024 * 1024) {
+          toast({
+            title: "이미지 크기 초과",
+            description: `${file.name}은(는) 압축 후에도 너무 큽니다.`,
+            variant: "destructive",
+            duration: 3000
+          });
+          continue;
+        }
+        
+        totalSize += imageSize;
+        
         newPhotos.push({
           id: generateId(),
           data: compressedData,
-          name: file.name
+          name: file.name,
+          timestamp: Date.now()
         });
       } catch (error) {
         console.error('Error compressing image:', error);
@@ -201,10 +241,32 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     }
 
     if (newPhotos.length > 0) {
-      handleFloorChange(floorId, 'photos', [...floor.photos, ...newPhotos]);
+      // 즉시 IndexedDB에 저장하여 메모리 문제 방지
+      const updatedFloors = formData.floors.map(f =>
+        f.id === floorId ? { ...f, photos: [...f.photos, ...newPhotos] } : f
+      );
+      
+      const updatedFormData = { ...formData, floors: updatedFloors };
+      setFormData(updatedFormData);
+      
+      // 자동저장이 비활성화된 경우에도 사진은 즉시 저장
+      try {
+        const { saveLocations } = await import('../utils/storage');
+        const currentLocations = await import('../utils/storage').then(m => m.loadLocations());
+        const locationIndex = currentLocations.findIndex(loc => loc.id === formData.id);
+        
+        if (locationIndex >= 0) {
+          const updatedLocations = [...currentLocations];
+          updatedLocations[locationIndex] = updatedFormData;
+          await saveLocations(updatedLocations);
+        }
+      } catch (error) {
+        console.warn('Failed to auto-save photos:', error);
+      }
+      
       toast({
         title: "사진 업로드 완료",
-        description: `${newPhotos.length}장의 사진이 추가되었습니다.`,
+        description: `${newPhotos.length}장의 사진이 추가되었습니다. (총 크기: ${Math.round(totalSize / 1024)}KB)`,
         duration: 300
       });
     }
@@ -437,10 +499,10 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
               {/* 사진 업로드 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  사진 ({floor.photos.length}/3)
+                  사진 ({floor.photos.length}/5)
                 </label>
                 
-                <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
                   {floor.photos.map(photo => (
                     <div key={photo.id} className="relative">
                       <img
@@ -461,7 +523,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                   ))}
                 </div>
 
-                {!floor.isCompleted && floor.photos.length < 3 && (
+                {!floor.isCompleted && floor.photos.length < 5 && (
                   <div className="flex gap-2">
                     <label className="flex-1 flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-lg p-3 hover:border-teal-500 hover:bg-teal-50 cursor-pointer touch-target">
                       <Camera className="h-5 w-5 text-gray-500" />
