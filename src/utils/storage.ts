@@ -188,3 +188,190 @@ export const saveSettings = (settings: AppSettings): void => {
     console.error('Error saving settings:', error);
   }
 };
+
+// 스토리지 상태 진단 함수
+export const diagnoseStorage = async (): Promise<{
+  localStorageSize: number;
+  indexedDBSize: number;
+  quotaUsed: number;
+  quotaTotal: number;
+  localStorageWorking: boolean;
+  indexedDBWorking: boolean;
+  localCount: number;
+  indexedDBCount: number;
+}> => {
+  const result = {
+    localStorageSize: 0,
+    indexedDBSize: 0,
+    quotaUsed: 0,
+    quotaTotal: 0,
+    localStorageWorking: false,
+    indexedDBWorking: false,
+    localCount: 0,
+    indexedDBCount: 0
+  };
+
+  // localStorage 진단
+  try {
+    const localData = localStorage.getItem(STORAGE_KEY);
+    if (localData) {
+      result.localStorageSize = new Blob([localData]).size;
+      result.localCount = JSON.parse(localData).length;
+    }
+    
+    // localStorage 쓰기 테스트
+    const testKey = '__storage_test__';
+    localStorage.setItem(testKey, 'test');
+    localStorage.removeItem(testKey);
+    result.localStorageWorking = true;
+  } catch (error) {
+    console.error('localStorage 진단 실패:', error);
+  }
+
+  // IndexedDB 진단
+  try {
+    const indexedDBData = await loadFromIndexedDB();
+    result.indexedDBCount = indexedDBData.length;
+    result.indexedDBSize = new Blob([JSON.stringify(indexedDBData)]).size;
+    result.indexedDBWorking = true;
+  } catch (error) {
+    console.error('IndexedDB 진단 실패:', error);
+  }
+
+  // 스토리지 쿼터 확인
+  try {
+    if ('storage' in navigator && 'estimate' in navigator.storage) {
+      const estimate = await navigator.storage.estimate();
+      result.quotaUsed = estimate.usage || 0;
+      result.quotaTotal = estimate.quota || 0;
+    }
+  } catch (error) {
+    console.error('쿼터 확인 실패:', error);
+  }
+
+  return result;
+};
+
+// 안전한 저장 함수 (개별 저장 방식)
+export const saveLocationSafely = async (location: Location): Promise<void> => {
+  try {
+    // 1. 기존 데이터 로드
+    const existingLocations = await loadLocations();
+    
+    // 2. 해당 위치 찾기 또는 추가
+    const existingIndex = existingLocations.findIndex(loc => loc.id === location.id);
+    let updatedLocations;
+    
+    if (existingIndex >= 0) {
+      updatedLocations = [...existingLocations];
+      updatedLocations[existingIndex] = location;
+    } else {
+      updatedLocations = [location, ...existingLocations];
+    }
+
+    // 3. IndexedDB에 개별 저장 (더 안전함)
+    try {
+      const db = await initDB();
+      const transaction = db.transaction([STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      
+      // 개별 위치만 저장/업데이트 (전체 클리어 방식보다 안전)
+      await new Promise((resolve, reject) => {
+        const request = store.put(location);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+      });
+      
+      console.log(`위치 ${location.id} IndexedDB 저장 완료`);
+    } catch (error) {
+      console.error('IndexedDB 개별 저장 실패:', error);
+    }
+
+    // 4. localStorage에 전체 저장 (백업용)
+    try {
+      const dataToSave = JSON.stringify(updatedLocations);
+      const dataSize = new Blob([dataToSave]).size;
+      
+      // 5MB 이상이면 localStorage 저장 건너뛰기
+      if (dataSize < 5 * 1024 * 1024) {
+        localStorage.setItem(STORAGE_KEY, dataToSave);
+        console.log(`localStorage 저장 완료 (크기: ${Math.round(dataSize / 1024)}KB)`);
+      } else {
+        console.warn('데이터가 너무 커서 localStorage 저장 건너뜀');
+      }
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') {
+        console.warn('localStorage 용량 초과, IndexedDB만 사용');
+        // localStorage 정리 시도
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify([location])); // 최소한 현재 데이터라도 저장
+        } catch (cleanupError) {
+          console.error('localStorage 정리 실패:', cleanupError);
+        }
+      } else {
+        console.error('localStorage 저장 실패:', error);
+      }
+    }
+  } catch (error) {
+    console.error('안전한 저장 실패:', error);
+    throw error;
+  }
+};
+
+// 데이터 복구 시도 함수
+export const attemptDataRecovery = async (): Promise<Location[]> => {
+  console.log('데이터 복구 시도 중...');
+  
+  const recoveredData: Location[] = [];
+  
+  // 1. IndexedDB에서 복구 시도
+  try {
+    const indexedDBData = await loadFromIndexedDB();
+    if (indexedDBData.length > 0) {
+      recoveredData.push(...indexedDBData);
+      console.log(`IndexedDB에서 ${indexedDBData.length}개 위치 복구`);
+    }
+  } catch (error) {
+    console.error('IndexedDB 복구 실패:', error);
+  }
+
+  // 2. localStorage에서 복구 시도
+  try {
+    const localData = localStorage.getItem(STORAGE_KEY);
+    if (localData) {
+      const parsed = JSON.parse(localData);
+      const localLocations = Array.isArray(parsed) ? parsed : [];
+      
+      // 중복 제거하면서 병합
+      for (const localLocation of localLocations) {
+        const existsInRecovered = recoveredData.find(loc => loc.id === localLocation.id);
+        if (!existsInRecovered) {
+          recoveredData.push(localLocation);
+        } else {
+          // 더 최신 데이터 유지
+          const recoveredIndex = recoveredData.findIndex(loc => loc.id === localLocation.id);
+          if (localLocation.lastSaved && localLocation.lastSaved > (existsInRecovered.lastSaved || 0)) {
+            recoveredData[recoveredIndex] = localLocation;
+          }
+        }
+      }
+      console.log(`localStorage에서 추가 복구, 총 ${recoveredData.length}개 위치`);
+    }
+  } catch (error) {
+    console.error('localStorage 복구 실패:', error);
+  }
+
+  // 3. Service Worker의 긴급 저장 데이터 확인
+  try {
+    const emergencyDB = indexedDB.open('FieldReportDB', 1);
+    emergencyDB.onsuccess = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      console.log('Service Worker 긴급 저장 데이터 확인 완료');
+    };
+  } catch (error) {
+    console.error('Service Worker 데이터 확인 실패:', error);
+  }
+
+  return recoveredData.sort((a, b) => (b.lastSaved || b.timestamp) - (a.lastSaved || a.timestamp));
+};

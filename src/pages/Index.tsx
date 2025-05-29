@@ -7,8 +7,9 @@ import PWAInstallPrompt from '../components/PWAInstallPrompt';
 import SettingsModal from '../components/SettingsModal';
 import { Location } from '../types/location';
 import { AppSettings } from '../types/location';
-import { loadLocations, saveLocations, syncStorageData, loadSettings, saveSettings } from '../utils/storage';
+import { loadLocations, saveLocations, syncStorageData, loadSettings, saveSettings, attemptDataRecovery } from '../utils/storage';
 import { useToast } from '../hooks/use-toast';
+import { startMemoryMonitoring, requestEmergencySave } from '../utils/imageUtils';
 
 const Index = () => {
   const [currentView, setCurrentView] = useState<'list' | 'form' | 'report'>('list');
@@ -49,7 +50,8 @@ const Index = () => {
         toast({
           title: "자동 저장 완료",
           description: "데이터가 자동으로 저장되었습니다.",
-          duration: 1000
+          duration: 1000,
+          className: "scale-75 origin-top-right"
         });
       } catch (error) {
         console.error('Auto save failed:', error);
@@ -76,17 +78,54 @@ const Index = () => {
         await syncStorageData();
         
         // 데이터 로드
-        const savedLocations = await loadLocations();
+        let savedLocations = await loadLocations();
+        
+        // 데이터가 없거나 부족한 경우 복구 시도
+        if (savedLocations.length === 0) {
+          console.log('저장된 데이터가 없음. 복구 시도 중...');
+          const recoveredData = await attemptDataRecovery();
+          if (recoveredData.length > 0) {
+            savedLocations = recoveredData;
+            toast({
+              title: "데이터 복구",
+              description: `${recoveredData.length}개의 위치 데이터를 복구했습니다.`,
+              duration: 5000
+            });
+          }
+        }
+        
         setLocations(savedLocations);
         
         console.log(`앱 시작: ${savedLocations.length}개의 저장된 위치 로드됨`);
       } catch (error) {
         console.error('데이터 초기화 오류:', error);
-        toast({
-          title: "데이터 로드 오류",
-          description: "저장된 데이터를 불러오는 중 오류가 발생했습니다.",
-          variant: "destructive"
-        });
+        
+        // 복구 시도
+        try {
+          console.log('오류 발생. 데이터 복구 시도 중...');
+          const recoveredData = await attemptDataRecovery();
+          if (recoveredData.length > 0) {
+            setLocations(recoveredData);
+            toast({
+              title: "데이터 복구 성공",
+              description: `오류가 발생했지만 ${recoveredData.length}개의 데이터를 복구했습니다.`,
+              duration: 5000
+            });
+          } else {
+            toast({
+              title: "데이터 로드 오류",
+              description: "저장된 데이터를 불러오는 중 오류가 발생했습니다.",
+              variant: "destructive"
+            });
+          }
+        } catch (recoveryError) {
+          console.error('데이터 복구도 실패:', recoveryError);
+          toast({
+            title: "심각한 오류",
+            description: "데이터 로드 및 복구에 모두 실패했습니다.",
+            variant: "destructive"
+          });
+        }
       } finally {
         setIsLoading(false);
       }
@@ -94,6 +133,24 @@ const Index = () => {
 
     initializeData();
   }, []);
+
+  // 메모리 모니터링 시작
+  useEffect(() => {
+    const stopMonitoring = startMemoryMonitoring(() => {
+      // 메모리 경고 시 긴급 저장 수행
+      if (locations.length > 0) {
+        requestEmergencySave(locations);
+        toast({
+          title: "메모리 경고",
+          description: "메모리 사용량이 높아 데이터를 긴급 저장했습니다.",
+          variant: "destructive",
+          duration: 5000
+        });
+      }
+    });
+
+    return stopMonitoring;
+  }, [locations]);
 
   const handleSaveLocation = async (location: Location) => {
     try {

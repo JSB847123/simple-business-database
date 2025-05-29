@@ -84,3 +84,53 @@ export const getMemoryUsage = (): { used: number; total: number } | null => {
   }
   return null;
 };
+
+// Service Worker에 긴급 저장 요청
+export const requestEmergencySave = async (locations: any[]) => {
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    try {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'EMERGENCY_SAVE',
+        locations: locations
+      });
+      console.log('긴급 저장 요청 전송됨');
+    } catch (error) {
+      console.error('긴급 저장 요청 실패:', error);
+    }
+  }
+};
+
+// 메모리 경고를 Service Worker에 전송
+export const sendMemoryWarning = () => {
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    try {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'MEMORY_WARNING'
+      });
+      console.log('메모리 경고 전송됨');
+    } catch (error) {
+      console.error('메모리 경고 전송 실패:', error);
+    }
+  }
+};
+
+// 메모리 모니터링 및 자동 보호
+export const startMemoryMonitoring = (onMemoryWarning?: () => void) => {
+  const checkMemory = () => {
+    const memoryInfo = getMemoryUsage();
+    if (memoryInfo) {
+      const usagePercent = memoryInfo.used / memoryInfo.total;
+      
+      if (usagePercent > 0.85) {
+        console.warn(`메모리 사용량 높음: ${Math.round(usagePercent * 100)}%`);
+        sendMemoryWarning();
+        onMemoryWarning?.();
+      }
+    }
+  };
+
+  // 5초마다 메모리 체크
+  const interval = setInterval(checkMemory, 5000);
+  
+  return () => clearInterval(interval);
+};

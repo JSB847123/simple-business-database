@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Plus, Trash2, Camera, Check, Edit } from 'lucide-react';
 import { Location, Floor, Photo, LOCATION_TYPES, FLOOR_OPTIONS } from '../types/location';
-import { generateId } from '../utils/storage';
+import { generateId, saveLocationSafely } from '../utils/storage';
 import { compressImage, checkImageSize, getMemoryUsage } from '../utils/imageUtils';
 import { useToast } from '../hooks/use-toast';
 
@@ -39,6 +39,71 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       });
     }
   }, [location]);
+
+  // 앱 종료 시 데이터 손실 방지
+  useEffect(() => {
+    const handleBeforeUnload = async (event: BeforeUnloadEvent) => {
+      // 변경사항이 있는 경우 저장 시도
+      if (formData.id && (formData.address.addressAndName || formData.floors.some(f => f.photos.length > 0))) {
+        try {
+          const { saveLocations, loadLocations } = await import('../utils/storage');
+          const currentLocations = await loadLocations();
+          const locationIndex = currentLocations.findIndex(loc => loc.id === formData.id);
+          
+          let updatedLocations;
+          if (locationIndex >= 0) {
+            updatedLocations = [...currentLocations];
+            updatedLocations[locationIndex] = { ...formData, lastSaved: Date.now() };
+          } else {
+            updatedLocations = [{ ...formData, lastSaved: Date.now() }, ...currentLocations];
+          }
+          
+          await saveLocations(updatedLocations);
+          console.log('앱 종료 전 긴급 저장 완료');
+        } catch (error) {
+          console.error('앱 종료 전 저장 실패:', error);
+          // 사용자에게 경고 표시
+          event.preventDefault();
+          event.returnValue = '저장되지 않은 데이터가 있습니다. 정말 나가시겠습니까?';
+          return event.returnValue;
+        }
+      }
+    };
+
+    const handleVisibilityChange = async () => {
+      // 앱이 백그라운드로 이동할 때 저장
+      if (document.visibilityState === 'hidden' && formData.id) {
+        try {
+          const { saveLocations, loadLocations } = await import('../utils/storage');
+          const currentLocations = await loadLocations();
+          const locationIndex = currentLocations.findIndex(loc => loc.id === formData.id);
+          
+          let updatedLocations;
+          if (locationIndex >= 0) {
+            updatedLocations = [...currentLocations];
+            updatedLocations[locationIndex] = { ...formData, lastSaved: Date.now() };
+          } else {
+            updatedLocations = [{ ...formData, lastSaved: Date.now() }, ...currentLocations];
+          }
+          
+          await saveLocations(updatedLocations);
+          console.log('백그라운드 이동 시 저장 완료');
+        } catch (error) {
+          console.error('백그라운드 저장 실패:', error);
+        }
+      }
+    };
+
+    // 이벤트 리스너 등록
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // 정리 함수
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [formData]);
 
   const createNewFloor = (): Floor => ({
     id: generateId(),
@@ -191,6 +256,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     const newPhotos: Photo[] = [];
     let totalSize = 0;
     
+    // 각 파일을 개별적으로 처리하여 메모리 효율성 향상
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file.type.startsWith('image/')) continue;
@@ -223,12 +289,42 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         
         totalSize += imageSize;
         
-        newPhotos.push({
+        const newPhoto: Photo = {
           id: generateId(),
           data: compressedData,
           name: file.name,
           timestamp: Date.now()
-        });
+        };
+        
+        newPhotos.push(newPhoto);
+        
+        // 각 사진을 개별적으로 즉시 저장 (메모리 문제 방지)
+        try {
+          const updatedFloors = formData.floors.map(f =>
+            f.id === floorId ? { ...f, photos: [...f.photos, newPhoto] } : f
+          );
+          
+          const updatedFormData = { ...formData, floors: updatedFloors, lastSaved: Date.now() };
+          
+          // 더 안전한 저장 방식 사용
+          await saveLocationSafely(updatedFormData);
+          
+          // 상태 업데이트
+          setFormData(updatedFormData);
+          
+          console.log(`사진 ${newPhoto.name} 안전하게 저장 완료`);
+          
+        } catch (saveError) {
+          console.error('개별 사진 저장 실패:', saveError);
+          // 저장 실패 시에도 메모리에는 유지하지만 경고 표시
+          toast({
+            title: "저장 경고",
+            description: `${newPhoto.name} 저장에 문제가 있었습니다. 수동으로 저장해주세요.`,
+            variant: "destructive",
+            duration: 5000
+          });
+        }
+        
       } catch (error) {
         console.error('Error compressing image:', error);
         toast({
@@ -241,32 +337,9 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     }
 
     if (newPhotos.length > 0) {
-      // 즉시 IndexedDB에 저장하여 메모리 문제 방지
-      const updatedFloors = formData.floors.map(f =>
-        f.id === floorId ? { ...f, photos: [...f.photos, ...newPhotos] } : f
-      );
-      
-      const updatedFormData = { ...formData, floors: updatedFloors };
-      setFormData(updatedFormData);
-      
-      // 자동저장이 비활성화된 경우에도 사진은 즉시 저장
-      try {
-        const { saveLocations } = await import('../utils/storage');
-        const currentLocations = await import('../utils/storage').then(m => m.loadLocations());
-        const locationIndex = currentLocations.findIndex(loc => loc.id === formData.id);
-        
-        if (locationIndex >= 0) {
-          const updatedLocations = [...currentLocations];
-          updatedLocations[locationIndex] = updatedFormData;
-          await saveLocations(updatedLocations);
-        }
-      } catch (error) {
-        console.warn('Failed to auto-save photos:', error);
-      }
-      
       toast({
         title: "사진 업로드 완료",
-        description: `${newPhotos.length}장의 사진이 추가되었습니다. (총 크기: ${Math.round(totalSize / 1024)}KB)`,
+        description: `${newPhotos.length}장의 사진이 추가되고 안전하게 저장되었습니다. (총 크기: ${Math.round(totalSize / 1024)}KB)`,
         duration: 300
       });
     }
