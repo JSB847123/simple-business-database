@@ -1,8 +1,9 @@
 export interface Photo {
   id: string;
-  data: string; // Base64 encoded image data
+  data?: string; // Base64 encoded image data (legacy, for backward compatibility)
   name: string;
   timestamp?: number; // 사진 업로드 시간
+  blobUrl?: string; // Blob URL for display (temporary)
 }
 
 export interface Floor {
