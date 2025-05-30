@@ -27,9 +27,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
   // 드래그 앤 드롭 상태 관리
   const [dragStates, setDragStates] = useState<{ [key: string]: boolean }>({});
 
-  // 연속 업로드 상태 관리
-  const [continuousUploadMode, setContinuousUploadMode] = useState<{ [key: string]: boolean }>({});
-  const [selectedCount, setSelectedCount] = useState<{ [key: string]: number }>({});
+  // 파일 선택 상태 관리 (연속 업로드 관련 상태 제거)
+  const [uploadingStates, setUploadingStates] = useState<{ [key: string]: boolean }>({});
 
   useEffect(() => {
     if (location) {
@@ -371,33 +370,6 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     }
   };
 
-  // 연속 업로드 모드 토글
-  const toggleContinuousUpload = (floorId: string) => {
-    const newMode = !continuousUploadMode[floorId];
-    setContinuousUploadMode(prev => ({ ...prev, [floorId]: newMode }));
-    
-    if (newMode) {
-      toast({
-        title: "연속 업로드 모드 활성화",
-        description: "한 장씩 여러 번 선택하여 업로드할 수 있습니다. 완료하려면 '완료' 버튼을 누르세요.",
-        duration: 4000
-      });
-    } else {
-      toast({
-        title: "연속 업로드 모드 종료",
-        description: "일반 업로드 모드로 돌아갑니다.",
-        duration: 2000
-      });
-      setSelectedCount(prev => ({ ...prev, [floorId]: 0 }));
-    }
-  };
-
-  // 기존 FileList 지원을 위한 함수
-  const handlePhotoUpload = async (floorId: string, files: FileList) => {
-    const filesArray = Array.from(files);
-    await handlePhotoUploadFromFiles(floorId, filesArray);
-  };
-
   // 드래그 앤 드롭 핸들러
   const handleDragOver = (e: React.DragEvent, floorId: string) => {
     e.preventDefault();
@@ -419,45 +391,62 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     }
   };
 
-  // 다중 선택을 강제하는 함수
+  // 다중 선택을 위한 개선된 함수
   const triggerMultipleFileSelect = (floorId: string, inputType: 'gallery' | 'camera') => {
+    setUploadingStates(prev => ({ ...prev, [floorId]: true }));
+    
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
-    input.multiple = true;
+    input.multiple = true; // 다중 선택 활성화
     
+    // 카메라 모드에서는 환경(후면) 카메라 사용
     if (inputType === 'camera') {
       input.capture = 'environment';
     }
     
     input.onchange = async (e) => {
       const target = e.target as HTMLInputElement;
+      setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+      
       if (target.files && target.files.length > 0) {
         const filesArray = Array.from(target.files);
         
-        // 선택된 파일 개수 표시
-        setSelectedCount(prev => ({ ...prev, [floorId]: filesArray.length }));
+        console.log(`Selected ${filesArray.length} files for upload`);
         
-        toast({
-          title: `${filesArray.length}장의 사진 선택됨`,
-          description: "이미지 처리 중...",
-          duration: 2000
-        });
+        // 선택된 파일 수에 따른 메시지
+        if (filesArray.length === 1) {
+          toast({
+            title: "1장의 사진 선택됨",
+            description: "이미지를 처리하고 있습니다...",
+            duration: 2000
+          });
+        } else {
+          toast({
+            title: `${filesArray.length}장의 사진 선택됨`,
+            description: "여러 이미지를 순차적으로 처리 중...",
+            duration: 3000
+          });
+        }
         
         await handlePhotoUploadFromFiles(floorId, filesArray);
-        
-        // 연속 업로드 모드가 활성화되어 있으면 자동으로 다시 선택창 열기
-        if (continuousUploadMode[floorId] && filesArray.length === 1) {
-          setTimeout(() => {
-            triggerMultipleFileSelect(floorId, inputType);
-          }, 500);
-        } else {
-          // 연속 모드 종료
-          setContinuousUploadMode(prev => ({ ...prev, [floorId]: false }));
-          setSelectedCount(prev => ({ ...prev, [floorId]: 0 }));
-        }
+      } else {
+        toast({
+          title: "선택 취소됨",
+          description: "사진이 선택되지 않았습니다.",
+          duration: 1500
+        });
       }
     };
+    
+    // 사용자에게 다중 선택 가능함을 알리는 토스트 (PC에서만)
+    if (inputType === 'gallery' && window.navigator.userAgent.indexOf('Mobile') === -1) {
+      toast({
+        title: "💡 다중 선택 팁",
+        description: "Ctrl(Cmd) + 클릭으로 여러 장을 한번에 선택할 수 있습니다!",
+        duration: 3000
+      });
+    }
     
     input.click();
   };
@@ -712,39 +701,6 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
 
                 {!floor.isCompleted && floor.photos.length < 5 && (
                   <div className="space-y-3">
-                    {/* 연속 업로드 모드 상태 표시 */}
-                    {continuousUploadMode[floor.id] && (
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse"></div>
-                            <span className="text-sm font-medium text-amber-800">
-                              연속 업로드 모드 활성화
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => toggleContinuousUpload(floor.id)}
-                            className="text-xs bg-amber-600 text-white px-2 py-1 rounded hover:bg-amber-700"
-                          >
-                            완료
-                          </button>
-                        </div>
-                        <p className="text-xs text-amber-700 mt-1">
-                          사진을 하나씩 선택하여 계속 추가할 수 있습니다.
-                        </p>
-                      </div>
-                    )}
-
-                    {/* 선택된 파일 개수 표시 */}
-                    {selectedCount[floor.id] > 0 && (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-center">
-                        <span className="text-sm font-medium text-blue-800">
-                          마지막 선택: {selectedCount[floor.id]}장의 사진
-                        </span>
-                      </div>
-                    )}
-
                     {/* 드래그 앤 드롭 영역 */}
                     <div
                       className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
@@ -767,36 +723,51 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                     </div>
 
                     {/* 업로드 버튼들 */}
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-3">
                       <button
                         type="button"
                         onClick={() => triggerMultipleFileSelect(floor.id, 'gallery')}
-                        className="flex items-center justify-center gap-1 bg-white border-2 border-teal-500 text-teal-600 rounded-lg p-2 hover:bg-teal-50 cursor-pointer touch-target"
+                        disabled={uploadingStates[floor.id]}
+                        className={`flex items-center justify-center gap-2 rounded-lg p-3 cursor-pointer touch-target text-sm font-medium transition-colors ${
+                          uploadingStates[floor.id]
+                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                            : 'bg-white border-2 border-teal-500 text-teal-600 hover:bg-teal-50'
+                        }`}
                       >
-                        <FolderOpen className="h-4 w-4" />
-                        <span className="text-xs font-medium">갤러리</span>
+                        {uploadingStates[floor.id] ? (
+                          <>
+                            <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-400 border-t-transparent"></div>
+                            <span>선택 중...</span>
+                          </>
+                        ) : (
+                          <>
+                            <FolderOpen className="h-5 w-5" />
+                            <span>갤러리에서 선택</span>
+                          </>
+                        )}
                       </button>
                       
                       <button
                         type="button"
                         onClick={() => triggerMultipleFileSelect(floor.id, 'camera')}
-                        className="flex items-center justify-center gap-1 bg-teal-500 text-white rounded-lg p-2 hover:bg-teal-600 cursor-pointer touch-target"
-                      >
-                        <Camera className="h-4 w-4" />
-                        <span className="text-xs font-medium">카메라</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => toggleContinuousUpload(floor.id)}
-                        className={`flex items-center justify-center gap-1 rounded-lg p-2 cursor-pointer touch-target text-xs font-medium ${
-                          continuousUploadMode[floor.id]
-                            ? 'bg-amber-500 text-white hover:bg-amber-600'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        disabled={uploadingStates[floor.id]}
+                        className={`flex items-center justify-center gap-2 rounded-lg p-3 cursor-pointer touch-target text-sm font-medium transition-colors ${
+                          uploadingStates[floor.id]
+                            ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                            : 'bg-teal-500 text-white hover:bg-teal-600'
                         }`}
                       >
-                        <Plus className="h-4 w-4" />
-                        <span>{continuousUploadMode[floor.id] ? '완료' : '연속'}</span>
+                        {uploadingStates[floor.id] ? (
+                          <>
+                            <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-200 border-t-transparent"></div>
+                            <span>선택 중...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Camera className="h-5 w-5" />
+                            <span>카메라로 촬영</span>
+                          </>
+                        )}
                       </button>
                     </div>
 
@@ -805,18 +776,23 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                       <div className="flex items-start gap-2">
                         <Image className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
                         <div className="text-xs text-blue-700">
-                          <p className="font-medium mb-2">다중 업로드 방법:</p>
+                          <p className="font-medium mb-2">📸 다중 업로드 방법:</p>
                           <div className="space-y-2">
                             <div className="bg-white bg-opacity-60 rounded p-2">
-                              <p className="font-medium mb-1">🖥️ PC/태블릿:</p>
-                              <p>• Ctrl (또는 Cmd) + 클릭으로 여러 장 선택</p>
+                              <p className="font-medium mb-1">🖥️ PC/노트북:</p>
+                              <p>• 갤러리 버튼 클릭 후 Ctrl(Cmd) + 클릭으로 여러 장 선택</p>
                               <p>• 드래그 앤 드롭으로 한번에 여러 장 추가</p>
                             </div>
                             <div className="bg-white bg-opacity-60 rounded p-2">
                               <p className="font-medium mb-1">📱 모바일:</p>
-                              <p>• 갤러리에서 여러 장 선택 (지원시)</p>
-                              <p>• <span className="font-medium text-amber-700">"연속" 버튼으로 한 장씩 여러 번 추가</span></p>
+                              <p>• 갤러리에서 다중 선택 (기기에 따라 지원)</p>
+                              <p>• 한 번에 안 되면 여러 번 나누어서 업로드</p>
                             </div>
+                          </div>
+                          <div className="mt-2 pt-2 border-t border-blue-200">
+                            <p className="text-xs text-blue-600">
+                              💡 한 번에 최대 5장까지, 각 파일 최대 10MB
+                            </p>
                           </div>
                         </div>
                       </div>
