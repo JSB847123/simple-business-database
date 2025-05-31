@@ -13,8 +13,21 @@ interface LocationFormProps {
   onCancel: () => void;
 }
 
-// 클라이언트와 서버의 포트 차이 해결을 위해 전체 URL 사용
-const API_BASE_URL = 'http://192.168.1.139:3001/api';
+// 동적으로 현재 호스트 기반 URL 생성
+const getCurrentHost = () => {
+  // 개발 환경에서는 직접 서버 포트 사용
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:3001/api';
+  }
+  // IP 주소 기반 접속 시 같은 IP의 3001 포트 사용
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(window.location.hostname)) {
+    return `http://${window.location.hostname}:3001/api`;
+  }
+  // 그 외 환경에서는 상대 경로 사용
+  return '/api';
+};
+
+const API_BASE_URL = getCurrentHost();
 
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
@@ -273,114 +286,57 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
   const uploadWithKey = async (floorId: string, files: File[], photoKey: string, endpoint: string): Promise<Photo[]> => {
     const formDataObj = new FormData();
     
-    // 개선된 방식으로 파일 추가 - 세 가지 방식을 모두 시도
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    // 간단한 방식으로 파일 추가
+    files.forEach((file, index) => {
+      formDataObj.append(photoKey, file);
+      console.log(`파일 ${index + 1} 추가: ${file.name} (${Math.round(file.size / 1024)}KB)`);
+    });
     
-    if (isIOS && files.length > 1) {
-      // iOS에서는 이름에 인덱스가 포함된 명시적 키 사용
-      files.forEach((file, index) => {
-        const uniqueKey = `${photoKey}_${index}_${Date.now()}`;
-        formDataObj.append(uniqueKey, file);
-        console.log(`iOS 최적화: 파일 ${index + 1} 추가 (${uniqueKey}): ${file.name} (${Math.round(file.size / 1024)}KB)`);
-      });
-    } else if (photoKey.endsWith('[]')) {
-      // 표준 다중 파일 방식: 같은 키를 반복 사용
-      files.forEach((file, index) => {
-        formDataObj.append(photoKey, file);
-        console.log(`파일 ${index + 1} 추가 (${photoKey}): ${file.name} (${Math.round(file.size / 1024)}KB)`);
-      });
-    } else {
-      // 대안 방식: 인덱스를 포함한 고유 키 사용
-      files.forEach((file, index) => {
-        formDataObj.append(`${photoKey}[${index}]`, file);
-        console.log(`파일 ${index + 1} 추가 (${photoKey}[${index}]): ${file.name} (${Math.round(file.size / 1024)}KB)`);
-      });
-    }
-    
-    // 수정: 컴포넌트의 formData에서 locationId 가져오기
+    // 필수 메타데이터 추가
     formDataObj.append('locationId', formData.id || generateId());
     formDataObj.append('floorId', floorId);
-    formDataObj.append('fileCount', files.length.toString()); // 명시적으로 파일 수 추가
+    formDataObj.append('fileCount', files.length.toString());
     
-    console.log(`=== FormData 업로드 (${photoKey} 키) ===`);
-    console.log('선택된 파일 수:', files.length);
-    console.log('FormData 엔트리 수:', Array.from(formDataObj.entries()).length);
-    console.log('locationId:', formData.id);
-    console.log('엔드포인트:', endpoint);
+    console.log(`=== FormData 업로드 시작 ===`);
+    console.log('파일 수:', files.length);
+    console.log('API URL:', `${API_BASE_URL}/photos${endpoint}`);
     
-    // 📋 FormData 내용 상세 로그
-    console.log('FormData 상세 내용:');
-    let photoCount = 0;
-    for (const [key, value] of formDataObj.entries()) {
-      if (key.includes(photoKey) || key === photoKey) {
-        photoCount++;
-        console.log(`  ${key} #${photoCount}:`, value instanceof File ? `파일(${value.name}, ${value.size}bytes)` : value);
-      } else {
-        console.log(`  ${key}:`, value);
-      }
-    }
-    console.log(`총 ${photoKey} 관련 엔트리: ${photoCount}개`);
-    
-    // 모바일 기기에서 fetch 요청이 실패하는 문제 해결
     try {
-      // 요청 헤더를 명시적으로 설정하지 않음 (브라우저가 자동으로 multipart/form-data 설정)
+      // fetch 요청 보내기
       const response = await fetch(`${API_BASE_URL}/photos${endpoint}`, {
         method: 'POST',
         body: formDataObj,
-        // 명시적으로 credentials 옵션 제거
       });
       
       if (!response.ok) {
-        try {
-          const errorData = await response.json();
-          throw new Error(`${photoKey} 키 업로드 실패: ${errorData.message || `HTTP ${response.status}`}`);
-        } catch (jsonError) {
-          // JSON 파싱 실패 시 일반 텍스트로 시도
-          const errorText = await response.text();
-          throw new Error(`업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
-        }
+        const errorText = await response.text();
+        throw new Error(`업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
       }
       
-      let result;
-      try {
-        result = await response.json();
-      } catch (error) {
-        console.error('서버 응답 파싱 오류:', error);
-        throw new Error('서버 응답을 해석할 수 없습니다');
-      }
+      const result = await response.json();
       
-      console.log(`=== 서버 응답 분석 (${photoKey} 키) ===`);
-      console.log('전체 응답:', result);
-      console.log('성공 여부:', result.success);
-      console.log('서버가 처리한 파일 수:', result.data?.count || 0);
-      console.log('서버 응답 사진 배열:', result.data?.photos?.length || 0);
+      console.log('서버 응답:', result);
       
       if (!result.success) {
         throw new Error(result.message || '업로드 실패');
       }
       
-      // 🔍 응답 데이터 검증
+      // 응답 데이터 검증
       const serverPhotos = result.data.photos;
       if (!Array.isArray(serverPhotos)) {
         throw new Error('서버 응답에서 photos 배열을 찾을 수 없습니다.');
       }
       
-      if (serverPhotos.length !== files.length) {
-        console.warn(`⚠️ 파일 수 불일치: 보낸 파일 ${files.length}개, 받은 응답 ${serverPhotos.length}개`);
-      }
-      
       // 서버에서 받은 데이터를 Photo 타입으로 변환
-      const convertedPhotos = serverPhotos.map((serverPhoto: any, index: number): Photo => {
-        console.log(`사진 ${index + 1} 변환:`, serverPhoto.name);
+      const convertedPhotos = serverPhotos.map((serverPhoto: any): Photo => {
         return {
           id: serverPhoto.id,
           name: serverPhoto.name,
-          data: `${API_BASE_URL}/photos${serverPhoto.url}`, // 서버 URL
+          data: `${API_BASE_URL}/photos${serverPhoto.url}`,
           timestamp: serverPhoto.timestamp
         };
       });
       
-      console.log(`✅ 최종 변환된 사진 수: ${convertedPhotos.length}개`);
       return convertedPhotos;
     } catch (error) {
       console.error('파일 업로드 실패:', error);

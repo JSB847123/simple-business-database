@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import presignRoutes from './routes/presign';
 import recordsRoutes from './routes/records';
 import photosRoutes from './routes/photos';
+import path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -17,8 +18,18 @@ app.use(cors({
   credentials: true
 }));
 
+// 로깅 미들웨어 추가
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  console.log('Headers:', JSON.stringify(req.headers));
+  next();
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// 정적 파일 제공 설정
+app.use('/api/photos/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
