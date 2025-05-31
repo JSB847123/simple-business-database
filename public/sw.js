@@ -1,4 +1,4 @@
-const CACHE_NAME = 'field-report-v1.0.0';
+const CACHE_NAME = 'field-report-v1.0.1';
 const EMERGENCY_DB_NAME = 'EmergencyBackupDB';
 const EMERGENCY_STORE_NAME = 'emergency_locations';
 const STATIC_CACHE_URLS = [

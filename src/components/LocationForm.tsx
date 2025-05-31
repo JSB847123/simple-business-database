@@ -13,7 +13,7 @@ interface LocationFormProps {
   onCancel: () => void;
 }
 
-const API_BASE_URL = 'http://192.168.0.100:3001/api'; // 로컬 IP 주소로 변경 (모바일 테스트용)
+const API_BASE_URL = 'http://localhost:3001/api';
 
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
@@ -394,64 +394,36 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
-    input.multiple = true; // ✅ 다중 선택 활성화
     
-    // 모바일 기기 감지 - 보다 정확한 탐지
-    const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    // 모바일 기기 감지
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
-    const isAndroid = /Android/.test(navigator.userAgent);
     
-    console.log('기기 정보:', { isMobile, isIOS, isAndroid, userAgent: navigator.userAgent });
-    
+    // 카메라 모드와 갤러리 모드 설정
     if (inputType === 'camera') {
-      // 카메라 모드에서는 capture 속성 사용
       input.capture = 'environment';
-      // 모바일 카메라는 보통 한 장씩만 지원
-      if (isMobile) {
-        input.multiple = false;
-      }
-    } else if (inputType === 'gallery') {
-      // 갤러리 모드에서는 capture 속성 제거 (iOS에서 더 잘 작동)
+      input.multiple = false; // 카메라는 항상 단일 파일
+    } else {
+      // 갤러리 모드에서는 다중 선택 활성화
+      input.multiple = true;
       input.removeAttribute('capture');
-      
-      // iOS에서 multiple 속성이 잘 작동하지 않는 경우가 있어 명시적 설정
-      if (isIOS) {
-        // iOS Safari에서는 무조건 multiple을 true로 설정 (Safari 버그 대응)
-        input.setAttribute('multiple', 'multiple');
-      }
     }
     
-    // 안전한 상태 관리
-    const setLoading = (loading: boolean) => {
-      setUploadingStates(prev => ({ ...prev, [floorId]: loading }));
-    };
+    // 즉시 로딩 상태 설정
+    setUploadingStates(prev => ({ ...prev, [floorId]: true }));
+    setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
     
-    const setProgress = (progress: number) => {
-      setUploadProgress(prev => ({ ...prev, [floorId]: progress }));
-    };
-    
-    // 🔥 강화된 상태 리셋 함수
-    const resetStates = () => {
-      console.log('상태 리셋 실행');
-      setLoading(false);
-      setProgress(0);
-    };
-    
-    // 🔥 타임아웃 설정 (20초)
+    // 타임아웃 설정 (30초)
     const timeoutId = setTimeout(() => {
       console.warn('파일 선택 타임아웃 - 강제 상태 리셋');
-      resetStates();
+      setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+      setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
       toast({
-        title: "⏱️ 시간 초과",
+        title: "시간 초과",
         description: "파일 선택이 취소되었습니다. 다시 시도해주세요.",
         variant: "destructive",
         duration: 3000
       });
-    }, 20000);
-    
-    // 🔥 즉시 로딩 상태 설정 (파일 선택 다이얼로그 표시 전)
-    setLoading(true);
-    console.log(`파일 선택 시작 - floorId: ${floorId}, type: ${inputType}, multiple: ${input.multiple}`);
+    }, 30000);
     
     // 🔥 파일 선택 다이얼로그가 닫혔을 때 감지 (개선된 버전)
     let fileSelectionHandled = false;
@@ -465,7 +437,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           if (!input.files || input.files.length === 0) {
             console.log('파일이 선택되지 않음 - 상태 리셋');
             clearTimeout(timeoutId);
-            resetStates();
+            setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+            setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
           }
         }
       }, 500);
@@ -481,7 +454,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
             if (!input.files || input.files.length === 0) {
               console.log('파일이 선택되지 않음 - 상태 리셋');
               clearTimeout(timeoutId);
-              resetStates();
+              setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+              setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
             }
           }
         }, 500);
@@ -525,7 +499,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       
       if (!target.files || target.files.length === 0) {
         console.log('파일이 선택되지 않음');
-        resetStates();
+        setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+        setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
         toast({
           title: "선택 취소됨",
           description: "사진이 선택되지 않았습니다.",
@@ -539,12 +514,14 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       
       if (!floor) {
         console.error('층을 찾을 수 없음:', floorId);
-        resetStates();
+        setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+        setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
         return;
       }
       
       if (floor.photos.length + filesArray.length > 5) {
-        resetStates();
+        setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+        setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
         toast({
           title: "업로드 제한",
           description: `층당 최대 5장까지 가능합니다. (현재: ${floor.photos.length}장)`,
@@ -559,7 +536,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       console.log('브라우저:', navigator.userAgent);
       console.log('입력 타입:', inputType);
       
-      setProgress(10);
+      setUploadProgress(prev => ({ ...prev, [floorId]: 10 }));
       
       try {
         // FormData 방식으로 서버에 업로드
@@ -569,7 +546,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           duration: 3000
         });
         
-        setProgress(30);
+        setUploadProgress(prev => ({ ...prev, [floorId]: 30 }));
         
         let uploadedPhotos: Photo[] = [];
         
@@ -580,7 +557,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           const allUploadedPhotos: Photo[] = [];
           
           for (let i = 0; i < filesArray.length; i++) {
-            setProgress(30 + Math.floor((i / filesArray.length) * 50));
+            setUploadProgress(prev => ({ ...prev, [floorId]: 30 + Math.floor((i / filesArray.length) * 50) }));
             try {
               // 각 파일을 개별적으로 업로드
               const singleFileArray = [filesArray[i]];
@@ -604,7 +581,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           uploadedPhotos = await uploadPhotosToServer(floorId, filesArray);
         }
         
-        setProgress(80);
+        setUploadProgress(prev => ({ ...prev, [floorId]: 80 }));
         
         // 성공적으로 업로드된 사진들을 상태에 추가
         console.log('=== 상태 업데이트 시작 ===');
@@ -622,7 +599,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           console.log('업데이트된 사진 목록:', updatedFloor?.photos.map(p => p.name) || []);
         }, 100);
         
-        setProgress(100);
+        setUploadProgress(prev => ({ ...prev, [floorId]: 100 }));
         
         toast({
           title: "🎉 업로드 완료!",
@@ -642,7 +619,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         });
       } finally {
         // 🔥 무조건 상태 리셋 (성공/실패 여부와 관계없이)
-        resetStates();
+        setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+        setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
         console.log('업로드 프로세스 종료 - 상태 리셋 완료');
       }
     };
@@ -653,7 +631,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       fileSelectionHandled = true;
       clearTimeout(timeoutId);
       cleanup();
-      resetStates();
+      setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+      setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
       toast({
         title: "❌ 오류 발생",
         description: "파일 선택 중 문제가 발생했습니다.",
@@ -668,7 +647,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       fileSelectionHandled = true;
       clearTimeout(timeoutId);
       cleanup();
-      resetStates();
+      setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+      setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
     };
     
     // 파일 선택 다이얼로그 열기
@@ -1018,7 +998,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         ) : (
                           <>
                             <FolderOpen className="h-5 w-5" />
-                            <span>갤러리에서 여러 장 선택</span>
+                            <span>사진첩에서 선택</span>
                           </>
                         )}
                       </button>
@@ -1056,7 +1036,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                           <div className="space-y-2">
                             <div className="bg-white bg-opacity-60 rounded p-2">
                               <p className="font-medium mb-1">✅ 다중 업로드 방법:</p>
-                              <p>• 갤러리 버튼을 누르세요</p>
+                              <p>• 사진첩 버튼을 누르세요</p>
                               <p>• 여러 장 선택 후 "완료" 누르기</p>
                               <p>• iOS에서는 사진마다 개별 업로드됨</p>
                             </div>
