@@ -15,19 +15,21 @@ interface LocationFormProps {
 
 // 모바일에서 API 서버 연결 문제 해결: 개발 환경과 프로덕션 환경을 구분
 const getAPIBaseURL = () => {
-  // 네트워크 접속 시 IP 주소 감지 (개발 환경)
+  // 개발 네트워크 IP 주소 (192.168.x.x, 172.x.x.x, 10.x.x.x)
   if (/^192\.168\./.test(window.location.hostname) || 
       /^172\./.test(window.location.hostname) || 
       /^10\./.test(window.location.hostname)) {
+    // 모바일 기기에서 접속 시 동일한 IP 주소의 서버 포트 사용
     return `http://${window.location.hostname}:3001/api`;
   }
   
-  // localhost 접속 시 (개발 환경)
+  // localhost 접속 시 (데스크톱 개발 환경)
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://localhost:3001/api';
   }
   
   // 그 외 환경에서는 상대 경로 사용 (프로덕션)
+  // 단, 이 경우 서버와 클라이언트가 같은 도메인에 호스팅되어 있어야 함
   return '/api';
 };
 
@@ -307,10 +309,17 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     console.log('API URL:', `${API_BASE_URL}/photos${endpoint}`);
     
     try {
-      // fetch 요청 보내기
+      // fetch 요청에 모바일 환경 최적화 옵션 추가
       const response = await fetch(`${API_BASE_URL}/photos${endpoint}`, {
         method: 'POST',
         body: formDataObj,
+        // CORS 문제 해결을 위한 설정
+        mode: 'cors',
+        credentials: 'same-origin',
+        // 네트워크 최적화
+        cache: 'no-cache',
+        // 타임아웃 방지를 위한 신호 객체 - 60초
+        signal: AbortSignal.timeout(60000)
       });
       
       console.log(`요청 정보: ${API_BASE_URL}/photos${endpoint}`, {
@@ -393,7 +402,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     setUploadingStates(prev => ({ ...prev, [floorId]: true }));
     setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
     
-    // 타임아웃 설정 (30초)
+    // 타임아웃 설정 (60초로 연장)
     const timeoutId = setTimeout(() => {
       console.warn('파일 선택 타임아웃 - 강제 상태 리셋');
       setUploadingStates(prev => ({ ...prev, [floorId]: false }));
@@ -404,7 +413,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         variant: "destructive",
         duration: 3000
       });
-    }, 30000);
+    }, 60000); // 60초로 연장
     
     // 파일 선택 완료 핸들러
     input.onchange = async (e) => {
@@ -466,61 +475,100 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         });
         
         setUploadProgress(prev => ({ ...prev, [floorId]: 30 }));
+
+        console.log('=== 모바일 다중 선택 성공 ===');
+        console.log('선택된 파일:', filesArray.map(f => ({ name: f.name, size: f.size })));
+        console.log('브라우저:', navigator.userAgent);
+        console.log('입력 타입:', inputType);
+        console.log('연결할 서버 URL:', API_BASE_URL);
         
-        let uploadedPhotos: Photo[] = [];
+        // 파일 크기 점검
+        const totalSizeMB = filesArray.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024);
+        console.log(`총 파일 크기: ${totalSizeMB.toFixed(2)}MB`);
         
-        // 모바일 기기에 따른 업로드 전략 분기
-        if (isIOS && filesArray.length > 1) {
-          // iOS에서 여러 장일 경우 각각 개별 업로드 시도 (대안 전략)
-          console.log('iOS에서 개별 업로드 전략 사용');
-          const allUploadedPhotos: Photo[] = [];
+        // 업로드 상태를 10%로 설정하고 화면에 표시
+        setUploadProgress(prev => ({ ...prev, [floorId]: 10 }));
+        
+        try {
+          // FormData 방식으로 서버에 업로드
+          toast({
+            title: `🚀 ${filesArray.length}장 서버 업로드 시작`,
+            description: `총 ${totalSizeMB.toFixed(1)}MB, 서버: ${API_BASE_URL}`,
+            duration: 3000
+          });
           
-          for (let i = 0; i < filesArray.length; i++) {
-            setUploadProgress(prev => ({ ...prev, [floorId]: 30 + Math.floor((i / filesArray.length) * 50) }));
-            try {
-              // 각 파일을 개별적으로 업로드
-              const singleFileArray = [filesArray[i]];
-              const result = await uploadPhotosToServer(floorId, singleFileArray);
-              allUploadedPhotos.push(...result);
-              console.log(`iOS 개별 업로드 ${i+1}/${filesArray.length} 성공:`, result);
-            } catch (error) {
-              console.error(`파일 ${i+1} 개별 업로드 실패:`, error);
-              toast({
-                title: `파일 ${i+1} 업로드 실패`,
-                description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
-                variant: "destructive",
-                duration: 2000
-              });
+          // 업로드 상태를 30%로 업데이트하고 사용자에게 진행 상황 표시
+          setUploadProgress(prev => ({ ...prev, [floorId]: 30 }));
+          
+          let uploadedPhotos: Photo[] = [];
+          
+          // 모바일 기기에 따른 업로드 전략 분기
+          if (isIOS && filesArray.length > 1) {
+            // iOS에서 여러 장일 경우 각각 개별 업로드 시도 (대안 전략)
+            console.log('iOS에서 개별 업로드 전략 사용');
+            const allUploadedPhotos: Photo[] = [];
+            
+            for (let i = 0; i < filesArray.length; i++) {
+              setUploadProgress(prev => ({ ...prev, [floorId]: 30 + Math.floor((i / filesArray.length) * 50) }));
+              try {
+                // 각 파일을 개별적으로 업로드
+                const singleFileArray = [filesArray[i]];
+                const result = await uploadPhotosToServer(floorId, singleFileArray);
+                allUploadedPhotos.push(...result);
+                console.log(`iOS 개별 업로드 ${i+1}/${filesArray.length} 성공:`, result);
+              } catch (error) {
+                console.error(`파일 ${i+1} 개별 업로드 실패:`, error);
+                toast({
+                  title: `파일 ${i+1} 업로드 실패`,
+                  description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
+                  variant: "destructive",
+                  duration: 2000
+                });
+              }
             }
+            
+            uploadedPhotos = allUploadedPhotos;
+          } else {
+            // 표준 방식: 모든 파일을 한번에 업로드
+            uploadedPhotos = await uploadPhotosToServer(floorId, filesArray);
           }
           
-          uploadedPhotos = allUploadedPhotos;
-        } else {
-          // 표준 방식: 모든 파일을 한번에 업로드
-          uploadedPhotos = await uploadPhotosToServer(floorId, filesArray);
-        }
-        
-        setUploadProgress(prev => ({ ...prev, [floorId]: 90 }));
-        
-        if (uploadedPhotos.length > 0) {
-          // 성공한 사진들을 층 데이터에 추가
-          handleFloorChange(floorId, 'photos', [
-            ...floor.photos,
-            ...uploadedPhotos
-          ]);
+          setUploadProgress(prev => ({ ...prev, [floorId]: 90 }));
           
-          toast({
-            title: "업로드 성공",
-            description: `${uploadedPhotos.length}장의 사진이 성공적으로 업로드되었습니다.`,
-            duration: 3000
-          });
-        } else {
+          if (uploadedPhotos.length > 0) {
+            // 성공한 사진들을 층 데이터에 추가
+            handleFloorChange(floorId, 'photos', [
+              ...floor.photos,
+              ...uploadedPhotos
+            ]);
+            
+            toast({
+              title: "업로드 성공",
+              description: `${uploadedPhotos.length}장의 사진이 성공적으로 업로드되었습니다.`,
+              duration: 3000
+            });
+          } else {
+            toast({
+              title: "업로드 실패",
+              description: "사진을 업로드하지 못했습니다. 다시 시도해주세요.",
+              variant: "destructive",
+              duration: 3000
+            });
+          }
+        } catch (error) {
+          console.error('파일 업로드 처리 오류:', error);
           toast({
             title: "업로드 실패",
-            description: "사진을 업로드하지 못했습니다. 다시 시도해주세요.",
+            description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
             variant: "destructive",
-            duration: 3000
+            duration: 4000
           });
+        } finally {
+          setUploadingStates(prev => ({ ...prev, [floorId]: false }));
+          setUploadProgress(prev => ({ ...prev, [floorId]: 100 }));
+          setTimeout(() => {
+            setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
+          }, 1000);
         }
       } catch (error) {
         console.error('파일 업로드 처리 오류:', error);
@@ -530,12 +578,6 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           variant: "destructive",
           duration: 4000
         });
-      } finally {
-        setUploadingStates(prev => ({ ...prev, [floorId]: false }));
-        setUploadProgress(prev => ({ ...prev, [floorId]: 100 }));
-        setTimeout(() => {
-          setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
-        }, 1000);
       }
     };
     
