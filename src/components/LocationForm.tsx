@@ -13,21 +13,9 @@ interface LocationFormProps {
   onCancel: () => void;
 }
 
-// 동적으로 현재 호스트 기반 URL 생성
-const getCurrentHost = () => {
-  // 개발 환경에서는 직접 서버 포트 사용
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return 'http://localhost:3001/api';
-  }
-  // IP 주소 기반 접속 시 같은 IP의 3001 포트 사용
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(window.location.hostname)) {
-    return `http://${window.location.hostname}:3001/api`;
-  }
-  // 그 외 환경에서는 상대 경로 사용
-  return '/api';
-};
-
-const API_BASE_URL = getCurrentHost();
+// 모바일 사진 업로드 문제 해결: 항상 상대 경로 사용
+// PWA에서 localhost는 스마트폰 자체를 가리키므로 절대 상대 경로만 사용해야 함
+const API_BASE_URL = '/api';
 
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
