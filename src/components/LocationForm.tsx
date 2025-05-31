@@ -230,19 +230,42 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     // 기기 정보 로깅
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
     const isAndroid = /Android/.test(navigator.userAgent);
-    console.log('📱 기기 정보:', {
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    
+    debugLog('📱 기기 정보:', {
       isIOS,
       isAndroid,
+      isSafari,
       userAgent: navigator.userAgent,
-      files: files.length
+      files: files.length,
+      filesInfo: files.map(f => ({ name: f.name, type: f.type, size: Math.round(f.size/1024) + 'KB' }))
     });
     
     // 서버 업로드 대신 로컬 처리 방식으로 변경
     console.log('로컬 파일 처리 시작:', files.length);
     
+    // 최대 허용 크기 검사 (10MB)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+    const oversizedFiles = files.filter(file => file.size > MAX_FILE_SIZE);
+    if (oversizedFiles.length > 0) {
+      debugLog('용량 초과 파일 감지:', oversizedFiles.map(f => ({ 
+        name: f.name, 
+        size: Math.round(f.size / (1024 * 1024)) + 'MB' 
+      })));
+      
+      // 큰 파일에 대한 경고 표시 (하지만 진행)
+      toast({
+        title: "대용량 이미지 감지",
+        description: "일부 이미지가 큽니다. 압축을 시도합니다.",
+        duration: 3000
+      });
+    }
+    
     try {
       // 파일 압축 및 로컬 저장 처리
       const results: Photo[] = [];
+      let successCount = 0;
+      let failCount = 0;
       
       for (let i = 0; i < files.length; i++) {
         try {
@@ -253,15 +276,27 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           }));
           
           const file = files[i];
+          
+          // 유효하지 않은 파일 건너뛰기
+          if (!file || file.size === 0) {
+            debugLog(`파일 ${i+1} 건너뛰기: 유효하지 않은 파일`);
+            failCount++;
+            continue;
+          }
+          
           const photoId = generateId();
           
-          debugLog(`파일 ${i+1} 처리 시작:`, { name: file.name, size: file.size, type: file.type });
+          debugLog(`파일 ${i+1}/${files.length} 처리 시작:`, { 
+            name: file.name, 
+            size: file.size, 
+            type: file.type 
+          });
           
           // 로컬 파일 처리 (압축 및 Blob URL 생성)
           const success = await saveCompressedPhoto(file, photoId, formData.id, floorId);
           
           if (success) {
-            debugLog(`파일 ${i+1} 압축 성공, URL 생성 시도`);
+            debugLog(`파일 ${i+1}/${files.length} 압축 성공, URL 생성 시도`);
             // URL 가져오기
             const photoUrl = await getPhotoUrl(photoId);
             
@@ -275,17 +310,24 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
               };
               
               results.push(photo);
-              debugLog(`파일 ${i+1} 로컬 처리 완료:`, photo.name);
+              successCount++;
+              debugLog(`파일 ${i+1}/${files.length} 로컬 처리 완료:`, photo.name);
             } else {
-              debugLog(`파일 ${i+1} URL 생성 실패`);
-              throw new Error('URL 생성 실패');
+              debugLog(`파일 ${i+1}/${files.length} URL 생성 실패`);
+              failCount++;
             }
           } else {
-            debugLog(`파일 ${i+1} 압축/저장 실패`);
-            throw new Error('압축/저장 실패');
+            debugLog(`파일 ${i+1}/${files.length} 압축/저장 실패`);
+            failCount++;
           }
         } catch (err) {
-          console.error(`파일 ${i+1} 처리 실패:`, err);
+          console.error(`파일 ${i+1}/${files.length} 처리 실패:`, err);
+          failCount++;
+        }
+        
+        // 중간 진행상황 알림 (큰 배치의 경우)
+        if (files.length > 2 && i > 0 && (i + 1) % 2 === 0) {
+          debugLog(`중간 진행 상황: ${i+1}/${files.length} 완료`);
         }
       }
       
@@ -294,6 +336,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       setTimeout(() => {
         setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
       }, 1000);
+      
+      debugLog(`처리 결과: 성공 ${successCount}개, 실패 ${failCount}개`);
       
       if (results.length === 0) {
         throw new Error('모든 파일 처리 실패');
@@ -311,7 +355,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
   const triggerMultipleFileSelect = (floorId: string, inputType: 'gallery' | 'camera') => {
     if (uploadingStates[floorId]) {
       toast({
-        title: "업로드 진행 중",
+        title: "처리 진행 중",
         description: "현재 파일을 처리 중입니다. 잠시 기다려주세요.",
         duration: 2000
       });
@@ -324,16 +368,26 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     
     // 모바일 기기 감지
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const isAndroid = /Android/.test(navigator.userAgent);
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
     
     // 카메라 모드와 갤러리 모드 설정
     if (inputType === 'camera') {
+      // 카메라는 모든 기기에서 단일 파일로 제한
       input.capture = 'environment';
-      input.multiple = false; // 카메라는 항상 단일 파일
+      input.multiple = false;
     } else {
-      // 갤러리 모드에서는 다중 선택 활성화
-      input.multiple = true;
-      // 캡처 속성 제거
+      // 갤러리 모드 설정
       input.removeAttribute('capture');
+      
+      // Safari/iOS에서는 다중 선택 제한
+      if (isIOS && isSafari) {
+        // iOS Safari는 여러 파일 처리가 불안정할 수 있음
+        input.multiple = false;
+        console.log('iOS Safari에서는 단일 파일 모드로 설정');
+      } else {
+        input.multiple = true;
+      }
     }
     
     // 즉시 로딩 상태 설정
@@ -375,6 +429,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         return;
       }
       
+      // 선택된 파일 복사 (FileList는 변경될 수 있음)
       const filesArray = Array.from(target.files);
       const floor = formData.floors.find(f => f.id === floorId);
       
@@ -418,11 +473,12 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         try {
           let uploadedPhotos: Photo[] = [];
           
-          // iOS에서 여러 장일 경우 각각 개별 처리
-          if (isIOS && filesArray.length > 1) {
+          // iOS Safari에서는 항상 개별 처리 (더 안정적)
+          if (isIOS) {
             console.log('iOS에서 개별 처리 전략 사용');
             const allUploadedPhotos: Photo[] = [];
             
+            // 한 번에 하나씩 처리
             for (let i = 0; i < filesArray.length; i++) {
               setUploadProgress(prev => ({
                 ...prev,
@@ -437,21 +493,37 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
               } catch (error) {
                 console.error(`파일 ${i+1} 개별 처리 실패:`, error);
               }
+              
+              // 중간 성공 상태 반영 (사용자 경험 개선)
+              if (allUploadedPhotos.length > 0 && (i === filesArray.length - 1 || (i > 0 && i % 2 === 0))) {
+                // 현재까지 성공한 사진들을 미리 UI에 반영
+                handleFloorChange(floorId, 'photos', [
+                  ...floor.photos,
+                  ...allUploadedPhotos.filter(photo => 
+                    !floor.photos.some(p => p.id === photo.id)
+                  )
+                ]);
+              }
             }
             
             uploadedPhotos = allUploadedPhotos;
           } else {
-            // 표준 방식: 모든 파일을 한번에 처리
+            // 다른 기기에서는 일괄 처리 시도 (Android 등)
             uploadedPhotos = await uploadPhotosToServer(floorId, filesArray);
           }
           
           setUploadProgress(prev => ({ ...prev, [floorId]: 90 }));
           
           if (uploadedPhotos.length > 0) {
+            // 이미 추가된 사진을 제외하고 새 사진만 추가
+            const newPhotos = uploadedPhotos.filter(photo => 
+              !floor.photos.some(p => p.id === photo.id)
+            );
+            
             // 성공한 사진들을 층 데이터에 추가
             handleFloorChange(floorId, 'photos', [
               ...floor.photos,
-              ...uploadedPhotos
+              ...newPhotos
             ]);
             
             toast({
