@@ -9,15 +9,23 @@
     "start": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["field-report", "api", "express", "s3", "r2"],
+  "keywords": [
+    "field-report",
+    "api",
+    "express",
+    "s3",
+    "r2"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.821.0",
     "@aws-sdk/s3-request-presigner": "^3.821.0",
+    "@types/multer": "^1.4.12",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
+    "multer": "^2.0.0",
     "sqlite3": "^5.1.7",
     "uuid": "^11.1.0"
   },

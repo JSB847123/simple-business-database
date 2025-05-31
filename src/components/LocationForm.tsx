@@ -1,15 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Save, Plus, Trash2, Camera, Check, Edit, Upload, Image, FolderOpen } from 'lucide-react';
+import { ArrowLeft, Save, Plus, Trash2, Camera, Check, Edit, Image, FolderOpen, Upload } from 'lucide-react';
 import { Location, Floor, Photo, LOCATION_TYPES, FLOOR_OPTIONS } from '../types/location';
-import { generateId, saveLocationSafely } from '../utils/storage';
-import { compressImage, checkImageSize, getMemoryUsage } from '../utils/imageUtils';
+import { generateId } from '../utils/storage';
+import { saveLocation } from '../utils/storage-indexeddb';
+import { checkImageSize, getMemoryUsage } from '../utils/imageUtils';
 import { useToast } from '../hooks/use-toast';
+import { usePhotoManagerV2 } from '../hooks/usePhotoManagerV2';
 
 interface LocationFormProps {
   location?: Location | null;
   onSave: (location: Location) => void;
   onCancel: () => void;
 }
+
+const API_BASE_URL = 'http://192.168.0.100:3001/api'; // 로컬 IP 주소로 변경 (모바일 테스트용)
 
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
@@ -22,13 +26,12 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     timestamp: Date.now()
   });
   const { toast } = useToast();
+  const { saveCompressedPhoto, getPhotoUrl, removePhoto, revokeAllUrls } = usePhotoManagerV2();
   const floorRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   
-  // 드래그 앤 드롭 상태 관리
-  const [dragStates, setDragStates] = useState<{ [key: string]: boolean }>({});
-
-  // 파일 선택 상태 관리 (연속 업로드 관련 상태 제거)
+  // 업로드 상태 관리
   const [uploadingStates, setUploadingStates] = useState<{ [key: string]: boolean }>({});
+  const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
 
   useEffect(() => {
     if (location) {
@@ -44,27 +47,26 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         timestamp: Date.now()
       });
     }
+    
+    // 컴포넌트 마운트 시 모든 상태 초기화
+    setUploadingStates({});
+    setUploadProgress({});
   }, [location]);
 
-  // 앱 종료 시 데이터 손실 방지
+  // 컴포넌트 언마운트 시 모든 Blob URL 정리
+  useEffect(() => {
+    return () => {
+      revokeAllUrls();
+    };
+  }, [revokeAllUrls]);
+
+  // 앱 종료 시 데이터 손실 방지 (IndexedDB 기반)
   useEffect(() => {
     const handleBeforeUnload = async (event: BeforeUnloadEvent) => {
       if (formData.id && (formData.address.addressAndName || formData.floors.some(f => f.photos.length > 0))) {
         try {
-          const { saveLocations, loadLocations } = await import('../utils/storage');
-          const currentLocations = await loadLocations();
-          const locationIndex = currentLocations.findIndex(loc => loc.id === formData.id);
-          
-          let updatedLocations;
-          if (locationIndex >= 0) {
-            updatedLocations = [...currentLocations];
-            updatedLocations[locationIndex] = { ...formData, lastSaved: Date.now() };
-          } else {
-            updatedLocations = [{ ...formData, lastSaved: Date.now() }, ...currentLocations];
-          }
-          
-          await saveLocations(updatedLocations);
-          console.log('앱 종료 전 긴급 저장 완료');
+          await saveLocation(formData);
+          console.log('앱 종료 전 IndexedDB 긴급 저장 완료');
         } catch (error) {
           console.error('앱 종료 전 저장 실패:', error);
           event.preventDefault();
@@ -77,20 +79,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'hidden' && formData.id) {
         try {
-          const { saveLocations, loadLocations } = await import('../utils/storage');
-          const currentLocations = await loadLocations();
-          const locationIndex = currentLocations.findIndex(loc => loc.id === formData.id);
-          
-          let updatedLocations;
-          if (locationIndex >= 0) {
-            updatedLocations = [...currentLocations];
-            updatedLocations[locationIndex] = { ...formData, lastSaved: Date.now() };
-          } else {
-            updatedLocations = [{ ...formData, lastSaved: Date.now() }, ...currentLocations];
-          }
-          
-          await saveLocations(updatedLocations);
-          console.log('백그라운드 이동 시 저장 완료');
+          await saveLocation(formData);
+          console.log('백그라운드 이동 시 IndexedDB 저장 완료');
         } catch (error) {
           console.error('백그라운드 저장 실패:', error);
         }
@@ -224,238 +214,510 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     });
   };
 
-  // File 배열을 처리하는 핵심 함수
-  const handlePhotoUploadFromFiles = async (floorId: string, files: File[]) => {
-    const floor = formData.floors.find(f => f.id === floorId);
-    if (!floor) return;
-
-    if (floor.photos.length + files.length > 5) {
-      toast({
-        title: "업로드 제한",
-        description: `층당 최대 5장까지 가능합니다. (현재: ${floor.photos.length}장, 추가하려는: ${files.length}장)`,
-        variant: "destructive",
-        duration: 4000
-      });
-      return;
-    }
-
-    // 메모리 사용량 체크
-    const memoryInfo = getMemoryUsage();
-    if (memoryInfo && memoryInfo.used > memoryInfo.total * 0.8) {
-      toast({
-        title: "메모리 부족",
-        description: "메모리 사용량이 높습니다. 일부 사진을 삭제하거나 앱을 재시작해주세요.",
-        variant: "destructive",
-        duration: 5000
-      });
-      return;
-    }
-
-    const newPhotos: Photo[] = [];
-    let totalSize = 0;
-    let successCount = 0;
-    let failCount = 0;
+  // 🚀 FormData + array 방식으로 다중 파일 업로드 (모바일 최적화)
+  const uploadPhotosToServer = async (floorId: string, files: File[]): Promise<Photo[]> => {
+    // 기기 정보 로깅
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const isAndroid = /Android/.test(navigator.userAgent);
+    console.log('📱 기기 정보:', {
+      isIOS,
+      isAndroid,
+      userAgent: navigator.userAgent,
+      files: files.length
+    });
     
-    // 진행 상황 토스트 표시
-    if (files.length > 1) {
-      toast({
-        title: `${files.length}장의 사진 처리 시작`,
-        description: "이미지를 압축하고 저장하는 중...",
-        duration: 3000
-      });
-    }
-    
-    // 각 파일을 개별적으로 처리하여 메모리 효율성 향상
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (!file.type.startsWith('image/')) {
-        failCount++;
-        continue;
-      }
+    // 먼저 photos[] 키로 시도
+    try {
+      console.log('1️⃣ photos[] 키로 업로드 시도...');
+      return await uploadWithKey(floorId, files, 'photos[]', '/upload-multiple');
+    } catch (error) {
+      console.warn('photos[] 키 업로드 실패, photos 키로 재시도:', error);
       
-      // 파일 크기 체크 (10MB 제한)
-      if (file.size > 10 * 1024 * 1024) {
-        toast({
-          title: "파일 크기 초과",
-          description: `${file.name}은(는) 10MB를 초과합니다.`,
-          variant: "destructive",
-          duration: 3000
-        });
-        failCount++;
-        continue;
-      }
-      
+      // 대안으로 photos 키로 시도
       try {
-        const compressedData = await compressImage(file);
-        const imageSize = checkImageSize(compressedData);
+        console.log('2️⃣ photos 키로 업로드 재시도...');
+        return await uploadWithKey(floorId, files, 'photos', '/upload-multiple-alt');
+      } catch (fallbackError) {
+        console.error('모든 업로드 방식 실패:', fallbackError);
         
-        // 압축된 이미지 크기 체크 (2MB 제한)
-        if (imageSize > 2 * 1024 * 1024) {
-          toast({
-            title: "이미지 크기 초과",
-            description: `${file.name}은(는) 압축 후에도 너무 큽니다.`,
-            variant: "destructive",
-            duration: 3000
-          });
-          failCount++;
-          continue;
+        // 다른 모든 방식이 실패하면 마지막으로 각 파일 개별 업로드 시도
+        if (files.length > 1) {
+          console.log('3️⃣ 마지막 시도: 각 파일 개별 업로드...');
+          const results: Photo[] = [];
+          
+          for (let i = 0; i < files.length; i++) {
+            try {
+              const singleFile = [files[i]];
+              const result = await uploadWithKey(floorId, singleFile, 'photo', '/upload-single');
+              if (result && result.length > 0) {
+                results.push(result[0]);
+              }
+            } catch (singleError) {
+              console.error(`개별 파일 ${i} 업로드 실패:`, singleError);
+            }
+          }
+          
+          if (results.length > 0) {
+            console.log(`✅ 개별 업로드 부분 성공: ${results.length}/${files.length} 파일 업로드됨`);
+            return results;
+          }
         }
         
-        totalSize += imageSize;
-        
-        const newPhoto: Photo = {
-          id: generateId(),
-          data: compressedData,
-          name: file.name,
-          timestamp: Date.now()
-        };
-        
-        newPhotos.push(newPhoto);
-        
-        // 각 사진을 개별적으로 즉시 저장 (메모리 문제 방지)
-        try {
-          const updatedFloors = formData.floors.map(f =>
-            f.id === floorId ? { ...f, photos: [...f.photos, newPhoto] } : f
-          );
-          
-          const updatedFormData = { ...formData, floors: updatedFloors, lastSaved: Date.now() };
-          
-          await saveLocationSafely(updatedFormData);
-          setFormData(updatedFormData);
-          
-          successCount++;
-          console.log(`사진 ${newPhoto.name} 안전하게 저장 완료 (${i + 1}/${files.length})`);
-          
-        } catch (saveError) {
-          console.error('개별 사진 저장 실패:', saveError);
-          toast({
-            title: "저장 경고",
-            description: `${newPhoto.name} 저장에 문제가 있었습니다.`,
-            variant: "destructive",
-            duration: 3000
-          });
-          failCount++;
-        }
-        
-      } catch (error) {
-        console.error('Error compressing image:', error);
-        toast({
-          title: "이미지 처리 오류",
-          description: `${file.name} 파일을 처리할 수 없습니다.`,
-          variant: "destructive",
-          duration: 3000
-        });
-        failCount++;
+        throw fallbackError;
       }
     }
+  };
 
-    // 최종 결과 표시
-    if (successCount > 0) {
-      const resultMessage = failCount > 0 
-        ? `${successCount}장 성공, ${failCount}장 실패`
-        : `${successCount}장 모두 성공`;
-        
-      toast({
-        title: "사진 업로드 완료",
-        description: `${resultMessage} (총 크기: ${Math.round(totalSize / 1024)}KB)`,
-        duration: 4000
+  // 실제 업로드 함수
+  const uploadWithKey = async (floorId: string, files: File[], photoKey: string, endpoint: string): Promise<Photo[]> => {
+    const formDataObj = new FormData();
+    
+    // 개선된 방식으로 파일 추가 - 세 가지 방식을 모두 시도
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    
+    if (isIOS && files.length > 1) {
+      // iOS에서는 이름에 인덱스가 포함된 명시적 키 사용
+      files.forEach((file, index) => {
+        const uniqueKey = `${photoKey}_${index}_${Date.now()}`;
+        formDataObj.append(uniqueKey, file);
+        console.log(`iOS 최적화: 파일 ${index + 1} 추가 (${uniqueKey}): ${file.name} (${Math.round(file.size / 1024)}KB)`);
       });
-    } else if (failCount > 0) {
-      toast({
-        title: "업로드 실패",
-        description: `${failCount}장의 사진을 처리할 수 없었습니다.`,
-        variant: "destructive",
-        duration: 4000
+    } else if (photoKey.endsWith('[]')) {
+      // 표준 다중 파일 방식: 같은 키를 반복 사용
+      files.forEach((file, index) => {
+        formDataObj.append(photoKey, file);
+        console.log(`파일 ${index + 1} 추가 (${photoKey}): ${file.name} (${Math.round(file.size / 1024)}KB)`);
+      });
+    } else {
+      // 대안 방식: 인덱스를 포함한 고유 키 사용
+      files.forEach((file, index) => {
+        formDataObj.append(`${photoKey}[${index}]`, file);
+        console.log(`파일 ${index + 1} 추가 (${photoKey}[${index}]): ${file.name} (${Math.round(file.size / 1024)}KB)`);
       });
     }
-  };
-
-  // 드래그 앤 드롭 핸들러
-  const handleDragOver = (e: React.DragEvent, floorId: string) => {
-    e.preventDefault();
-    setDragStates(prev => ({ ...prev, [floorId]: true }));
-  };
-
-  const handleDragLeave = (e: React.DragEvent, floorId: string) => {
-    e.preventDefault();
-    setDragStates(prev => ({ ...prev, [floorId]: false }));
-  };
-
-  const handleDrop = async (e: React.DragEvent, floorId: string) => {
-    e.preventDefault();
-    setDragStates(prev => ({ ...prev, [floorId]: false }));
-
-    const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
-    if (files.length > 0) {
-      await handlePhotoUploadFromFiles(floorId, files);
+    
+    // 수정: 컴포넌트의 formData에서 locationId 가져오기
+    formDataObj.append('locationId', formData.id || generateId());
+    formDataObj.append('floorId', floorId);
+    formDataObj.append('fileCount', files.length.toString()); // 명시적으로 파일 수 추가
+    
+    console.log(`=== FormData 업로드 (${photoKey} 키) ===`);
+    console.log('선택된 파일 수:', files.length);
+    console.log('FormData 엔트리 수:', Array.from(formDataObj.entries()).length);
+    console.log('locationId:', formData.id);
+    console.log('엔드포인트:', endpoint);
+    
+    // 📋 FormData 내용 상세 로그
+    console.log('FormData 상세 내용:');
+    let photoCount = 0;
+    for (const [key, value] of formDataObj.entries()) {
+      if (key.includes(photoKey) || key === photoKey) {
+        photoCount++;
+        console.log(`  ${key} #${photoCount}:`, value instanceof File ? `파일(${value.name}, ${value.size}bytes)` : value);
+      } else {
+        console.log(`  ${key}:`, value);
+      }
     }
+    console.log(`총 ${photoKey} 관련 엔트리: ${photoCount}개`);
+    
+    // 요청 헤더를 명시적으로 설정하지 않음 (브라우저가 자동으로 multipart/form-data 설정)
+    const response = await fetch(`${API_BASE_URL}/photos${endpoint}`, {
+      method: 'POST',
+      body: formDataObj,
+    });
+    
+    if (!response.ok) {
+      try {
+        const errorData = await response.json();
+        throw new Error(`${photoKey} 키 업로드 실패: ${errorData.message || `HTTP ${response.status}`}`);
+      } catch (jsonError) {
+        // JSON 파싱 실패 시 일반 텍스트로 시도
+        const errorText = await response.text();
+        throw new Error(`업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
+      }
+    }
+    
+    let result;
+    try {
+      result = await response.json();
+    } catch (error) {
+      console.error('서버 응답 파싱 오류:', error);
+      throw new Error('서버 응답을 해석할 수 없습니다');
+    }
+    
+    console.log(`=== 서버 응답 분석 (${photoKey} 키) ===`);
+    console.log('전체 응답:', result);
+    console.log('성공 여부:', result.success);
+    console.log('서버가 처리한 파일 수:', result.data?.count || 0);
+    console.log('서버 응답 사진 배열:', result.data?.photos?.length || 0);
+    
+    if (!result.success) {
+      throw new Error(result.message || '업로드 실패');
+    }
+    
+    // 🔍 응답 데이터 검증
+    const serverPhotos = result.data.photos;
+    if (!Array.isArray(serverPhotos)) {
+      throw new Error('서버 응답에서 photos 배열을 찾을 수 없습니다.');
+    }
+    
+    if (serverPhotos.length !== files.length) {
+      console.warn(`⚠️ 파일 수 불일치: 보낸 파일 ${files.length}개, 받은 응답 ${serverPhotos.length}개`);
+    }
+    
+    // 서버에서 받은 데이터를 Photo 타입으로 변환
+    const convertedPhotos = serverPhotos.map((serverPhoto: any, index: number): Photo => {
+      console.log(`사진 ${index + 1} 변환:`, serverPhoto.name);
+      return {
+        id: serverPhoto.id,
+        name: serverPhoto.name,
+        data: `${API_BASE_URL}/photos${serverPhoto.url}`, // 서버 URL
+        timestamp: serverPhoto.timestamp
+      };
+    });
+    
+    console.log(`✅ 최종 변환된 사진 수: ${convertedPhotos.length}개`);
+    return convertedPhotos;
   };
 
-  // 다중 선택을 위한 개선된 함수
+  // 개선된 다중 파일 선택 및 업로드
   const triggerMultipleFileSelect = (floorId: string, inputType: 'gallery' | 'camera') => {
-    setUploadingStates(prev => ({ ...prev, [floorId]: true }));
+    if (uploadingStates[floorId]) {
+      toast({
+        title: "업로드 진행 중",
+        description: "현재 파일을 처리 중입니다. 잠시 기다려주세요.",
+        duration: 2000
+      });
+      return;
+    }
     
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
-    input.multiple = true; // 다중 선택 활성화
+    input.multiple = true; // ✅ 다중 선택 활성화
     
-    // 카메라 모드에서는 환경(후면) 카메라 사용
+    // 모바일 기기 감지 - 보다 정확한 탐지
+    const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const isAndroid = /Android/.test(navigator.userAgent);
+    
+    console.log('기기 정보:', { isMobile, isIOS, isAndroid, userAgent: navigator.userAgent });
+    
     if (inputType === 'camera') {
+      // 카메라 모드에서는 capture 속성 사용
       input.capture = 'environment';
+      // 모바일 카메라는 보통 한 장씩만 지원
+      if (isMobile) {
+        input.multiple = false;
+      }
+    } else if (inputType === 'gallery') {
+      // 갤러리 모드에서는 capture 속성 제거 (iOS에서 더 잘 작동)
+      input.removeAttribute('capture');
+      
+      // iOS에서 multiple 속성이 잘 작동하지 않는 경우가 있어 명시적 설정
+      if (isIOS) {
+        // iOS Safari에서는 무조건 multiple을 true로 설정 (Safari 버그 대응)
+        input.setAttribute('multiple', 'multiple');
+      }
     }
     
-    input.onchange = async (e) => {
-      const target = e.target as HTMLInputElement;
-      setUploadingStates(prev => ({ ...prev, [floorId]: false }));
-      
-      if (target.files && target.files.length > 0) {
-        const filesArray = Array.from(target.files);
-        
-        console.log(`Selected ${filesArray.length} files for upload`);
-        
-        // 선택된 파일 수에 따른 메시지
-        if (filesArray.length === 1) {
-          toast({
-            title: "1장의 사진 선택됨",
-            description: "이미지를 처리하고 있습니다...",
-            duration: 2000
-          });
-        } else {
-          toast({
-            title: `${filesArray.length}장의 사진 선택됨`,
-            description: "여러 이미지를 순차적으로 처리 중...",
-            duration: 3000
-          });
+    // 안전한 상태 관리
+    const setLoading = (loading: boolean) => {
+      setUploadingStates(prev => ({ ...prev, [floorId]: loading }));
+    };
+    
+    const setProgress = (progress: number) => {
+      setUploadProgress(prev => ({ ...prev, [floorId]: progress }));
+    };
+    
+    // 🔥 강화된 상태 리셋 함수
+    const resetStates = () => {
+      console.log('상태 리셋 실행');
+      setLoading(false);
+      setProgress(0);
+    };
+    
+    // 🔥 타임아웃 설정 (20초)
+    const timeoutId = setTimeout(() => {
+      console.warn('파일 선택 타임아웃 - 강제 상태 리셋');
+      resetStates();
+      toast({
+        title: "⏱️ 시간 초과",
+        description: "파일 선택이 취소되었습니다. 다시 시도해주세요.",
+        variant: "destructive",
+        duration: 3000
+      });
+    }, 20000);
+    
+    // 🔥 즉시 로딩 상태 설정 (파일 선택 다이얼로그 표시 전)
+    setLoading(true);
+    console.log(`파일 선택 시작 - floorId: ${floorId}, type: ${inputType}, multiple: ${input.multiple}`);
+    
+    // 🔥 파일 선택 다이얼로그가 닫혔을 때 감지 (개선된 버전)
+    let fileSelectionHandled = false;
+    
+    // Focus 이벤트 리스너
+    const handleWindowFocus = () => {
+      console.log('Window focus detected');
+      setTimeout(() => {
+        if (!fileSelectionHandled && uploadingStates[floorId]) {
+          console.log('파일 선택 다이얼로그 닫힘 감지 (focus) - 파일 확인 중...');
+          if (!input.files || input.files.length === 0) {
+            console.log('파일이 선택되지 않음 - 상태 리셋');
+            clearTimeout(timeoutId);
+            resetStates();
+          }
         }
+      }, 500);
+    };
+    
+    // Visibility change 이벤트 리스너 (모바일용)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !fileSelectionHandled && uploadingStates[floorId]) {
+        console.log('Visibility change detected - visible');
+        setTimeout(() => {
+          if (!fileSelectionHandled && uploadingStates[floorId]) {
+            console.log('파일 선택 다이얼로그 닫힘 감지 (visibility) - 파일 확인 중...');
+            if (!input.files || input.files.length === 0) {
+              console.log('파일이 선택되지 않음 - 상태 리셋');
+              clearTimeout(timeoutId);
+              resetStates();
+            }
+          }
+        }, 500);
+      }
+    };
+    
+    // 이벤트 리스너 등록
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // 클린업 함수
+    const cleanup = () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+    
+    input.onchange = async (e) => {
+      fileSelectionHandled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+      
+      const target = e.target as HTMLInputElement;
+      
+      console.log('파일 선택 이벤트 발생');
+      console.log('선택된 파일 수:', target.files?.length || 0);
+      
+      // 강화된 디버깅 로깅
+      if (target.files && target.files.length > 0) {
+        console.log('선택된 파일 목록:', Array.from(target.files).map(f => f.name).join(', '));
         
-        await handlePhotoUploadFromFiles(floorId, filesArray);
-      } else {
+        // 각 파일의 세부 정보 로깅
+        Array.from(target.files).forEach((file, idx) => {
+          console.log(`파일 ${idx+1} 세부정보:`, {
+            name: file.name,
+            size: `${Math.round(file.size / 1024)}KB`,
+            type: file.type,
+            lastModified: new Date(file.lastModified).toISOString()
+          });
+        });
+      }
+      
+      if (!target.files || target.files.length === 0) {
+        console.log('파일이 선택되지 않음');
+        resetStates();
         toast({
           title: "선택 취소됨",
           description: "사진이 선택되지 않았습니다.",
           duration: 1500
         });
+        return;
+      }
+      
+      const filesArray = Array.from(target.files);
+      const floor = formData.floors.find(f => f.id === floorId);
+      
+      if (!floor) {
+        console.error('층을 찾을 수 없음:', floorId);
+        resetStates();
+        return;
+      }
+      
+      if (floor.photos.length + filesArray.length > 5) {
+        resetStates();
+        toast({
+          title: "업로드 제한",
+          description: `층당 최대 5장까지 가능합니다. (현재: ${floor.photos.length}장)`,
+          variant: "destructive",
+          duration: 4000
+        });
+        return;
+      }
+      
+      console.log('=== 모바일 다중 선택 성공 ===');
+      console.log('선택된 파일:', filesArray.map(f => ({ name: f.name, size: f.size })));
+      console.log('브라우저:', navigator.userAgent);
+      console.log('입력 타입:', inputType);
+      
+      setProgress(10);
+      
+      try {
+        // FormData 방식으로 서버에 업로드
+        toast({
+          title: `🚀 ${filesArray.length}장 서버 업로드 시작`,
+          description: "FormData + array 방식으로 처리합니다...",
+          duration: 3000
+        });
+        
+        setProgress(30);
+        
+        let uploadedPhotos: Photo[] = [];
+        
+        // 모바일 기기에 따른 업로드 전략 분기
+        if (isIOS && filesArray.length > 1) {
+          // iOS에서 여러 장일 경우 각각 개별 업로드 시도 (대안 전략)
+          console.log('iOS에서 개별 업로드 전략 사용');
+          const allUploadedPhotos: Photo[] = [];
+          
+          for (let i = 0; i < filesArray.length; i++) {
+            setProgress(30 + Math.floor((i / filesArray.length) * 50));
+            try {
+              // 각 파일을 개별적으로 업로드
+              const singleFileArray = [filesArray[i]];
+              const result = await uploadPhotosToServer(floorId, singleFileArray);
+              allUploadedPhotos.push(...result);
+              console.log(`iOS 개별 업로드 ${i+1}/${filesArray.length} 성공:`, result);
+            } catch (error) {
+              console.error(`파일 ${i+1} 개별 업로드 실패:`, error);
+              toast({
+                title: `파일 ${i+1} 업로드 실패`,
+                description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
+                variant: "destructive",
+                duration: 2000
+              });
+            }
+          }
+          
+          uploadedPhotos = allUploadedPhotos;
+        } else {
+          // 일반적인 경우 모든 파일 한 번에 업로드
+          uploadedPhotos = await uploadPhotosToServer(floorId, filesArray);
+        }
+        
+        setProgress(80);
+        
+        // 성공적으로 업로드된 사진들을 상태에 추가
+        console.log('=== 상태 업데이트 시작 ===');
+        console.log('기존 사진 수:', floor.photos.length);
+        console.log('새로 업로드된 사진 수:', uploadedPhotos.length);
+        console.log('업데이트 후 예상 총 사진 수:', floor.photos.length + uploadedPhotos.length);
+        
+        handleFloorChange(floorId, 'photos', [...floor.photos, ...uploadedPhotos]);
+        
+        // 상태 업데이트 검증을 위해 약간의 지연 후 확인
+        setTimeout(() => {
+          const updatedFloor = formData.floors.find(f => f.id === floorId);
+          console.log('=== 상태 업데이트 결과 ===');
+          console.log('실제 업데이트된 사진 수:', updatedFloor?.photos.length || 0);
+          console.log('업데이트된 사진 목록:', updatedFloor?.photos.map(p => p.name) || []);
+        }, 100);
+        
+        setProgress(100);
+        
+        toast({
+          title: "🎉 업로드 완료!",
+          description: `${uploadedPhotos.length}장이 서버에 성공적으로 업로드되었습니다.`,
+          duration: 4000
+        });
+        
+        console.log('업로드 완료:', uploadedPhotos);
+        
+      } catch (error) {
+        console.error('업로드 실패:', error);
+        toast({
+          title: "❌ 업로드 실패",
+          description: error instanceof Error ? error.message : "서버 업로드 중 오류가 발생했습니다.",
+          variant: "destructive",
+          duration: 4000
+        });
+      } finally {
+        // 🔥 무조건 상태 리셋 (성공/실패 여부와 관계없이)
+        resetStates();
+        console.log('업로드 프로세스 종료 - 상태 리셋 완료');
       }
     };
     
-    // 사용자에게 다중 선택 가능함을 알리는 토스트 (PC에서만)
-    if (inputType === 'gallery' && window.navigator.userAgent.indexOf('Mobile') === -1) {
+    // 🔥 에러 핸들러 추가
+    input.onerror = () => {
+      console.error('파일 선택 에러 발생');
+      fileSelectionHandled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+      resetStates();
       toast({
-        title: "💡 다중 선택 팁",
-        description: "Ctrl(Cmd) + 클릭으로 여러 장을 한번에 선택할 수 있습니다!",
+        title: "❌ 오류 발생",
+        description: "파일 선택 중 문제가 발생했습니다.",
+        variant: "destructive",
+        duration: 3000
+      });
+    };
+    
+    // 🔥 abort 핸들러 추가
+    input.onabort = () => {
+      console.log('파일 선택 중단됨');
+      fileSelectionHandled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+      resetStates();
+    };
+    
+    // 파일 선택 다이얼로그 열기
+    try {
+      input.click();
+    } catch (error) {
+      console.error('파일 선택 다이얼로그 열기 실패:', error);
+      clearTimeout(timeoutId);
+      cleanup();
+      toast({
+        title: "❌ 오류",
+        description: "파일 선택 창을 열 수 없습니다.",
+        variant: "destructive",
         duration: 3000
       });
     }
-    
-    input.click();
   };
 
-  const handleRemovePhoto = (floorId: string, photoId: string) => {
+  const handleRemovePhoto = async (floorId: string, photoId: string) => {
     const floor = formData.floors.find(f => f.id === floorId);
     if (!floor) return;
 
-    handleFloorChange(floorId, 'photos', floor.photos.filter(p => p.id !== photoId));
+    try {
+      // 서버에서 삭제
+      const response = await fetch(`${API_BASE_URL}/photos/${photoId}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        // 상태에서도 제거
+        handleFloorChange(floorId, 'photos', floor.photos.filter(p => p.id !== photoId));
+        
+        toast({
+          title: "사진 삭제됨",
+          description: "사진이 서버에서 완전히 삭제되었습니다.",
+          duration: 2000
+        });
+      } else {
+        throw new Error('서버 삭제 실패');
+      }
+    } catch (error) {
+      console.error('Error removing photo:', error);
+      toast({
+        title: "삭제 실패",
+        description: "사진 삭제 중 오류가 발생했습니다.",
+        variant: "destructive",
+        duration: 3000
+      });
+    }
   };
 
   const handleSubmit = (e?: React.FormEvent) => {
@@ -486,6 +748,37 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     });
   };
 
+  // 사진 표시 컴포넌트
+  const PhotoDisplay: React.FC<{
+    photo: Photo;
+    onRemove?: () => void;
+    isReadOnly?: boolean;
+  }> = ({ photo, onRemove, isReadOnly = false }) => {
+    return (
+      <div className="relative">
+        <img
+          src={photo.data}
+          alt={photo.name}
+          className="w-full h-20 object-cover rounded border"
+          loading="lazy"
+          onError={(e) => {
+            console.error('이미지 로드 실패:', photo.name);
+            e.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIGZpbGw9Im5vbmUiIHZpZXdCb3g9IjAgMCAyNCAyNCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMjEgMTlWNWEyIDIgMCAwIDAtMi0ySDVhMiAyIDAgMCAwLTIgMnYxNGEyIDIgMCAwIDAgMiAyaDE0YTIgMiAwIDAgMCAyLTJ6IiBzdHJva2U9IiM5Y2ExYWYiIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0iI2Y5ZmFmYiIvPjxwYXRoIGQ9Im05IDEwIDIgMi0yIDIiIHN0cm9rZT0iIzljYTFhZiIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIi8+PC9zdmc+';
+          }}
+        />
+        {!isReadOnly && onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 touch-target"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="bg-white min-h-screen safe-area-bottom">
       {/* Header */}
@@ -511,7 +804,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       </div>
 
       <form onSubmit={handleSubmit} className="p-4 space-y-6">
-        {/* 주소 및 상호명 정보 */}
+        {/* 기본 정보 */}
         <div className="space-y-4">
           <h3 className="text-lg font-medium">기본 정보</h3>
           
@@ -529,9 +822,6 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               placeholder="예: 서울특별시 강남구 테헤란로 123 (카페 스타벅스)"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              주소와 건물명/상호명을 함께 입력하세요
-            </p>
           </div>
 
           <div>
@@ -561,9 +851,6 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
               rows={3}
               placeholder="확인해야 할 사항이나 점검 항목을 입력하세요 (선택사항)"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              예: 소방시설 점검, 출입구 확인, 주차장 상태 등
-            </p>
           </div>
         </div>
 
@@ -589,6 +876,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                 floor.isCompleted ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'
               }`}
             >
+              {/* 층 헤더 */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="bg-teal-100 text-teal-800 text-xs font-medium px-2.5 py-0.5 rounded">
@@ -633,6 +921,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                 </div>
               </div>
 
+              {/* 층 선택 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">층</label>
                 <select
@@ -660,6 +949,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                 )}
               </div>
 
+              {/* 내부 정보 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">내부 정보</label>
                 <textarea
@@ -672,55 +962,41 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                 />
               </div>
 
-              {/* 개선된 사진 업로드 섹션 */}
+              {/* 🚀 개선된 사진 업로드 섹션 - FormData + array 방식 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  사진 ({floor.photos.length}/5)
+                  사진 ({floor.photos.length}/5) - 서버 업로드
                 </label>
                 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
                   {floor.photos.map(photo => (
-                    <div key={photo.id} className="relative">
-                      <img
-                        src={photo.data}
-                        alt={photo.name}
-                        className="w-full h-20 object-cover rounded border"
-                      />
-                      {!floor.isCompleted && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemovePhoto(floor.id, photo.id)}
-                          className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 touch-target"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
+                    <PhotoDisplay 
+                      key={photo.id} 
+                      photo={photo} 
+                      onRemove={() => handleRemovePhoto(floor.id, photo.id)} 
+                    />
                   ))}
                 </div>
 
                 {!floor.isCompleted && floor.photos.length < 5 && (
                   <div className="space-y-3">
-                    {/* 드래그 앤 드롭 영역 */}
-                    <div
-                      className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
-                        dragStates[floor.id]
-                          ? 'border-teal-500 bg-teal-50'
-                          : 'border-gray-300 hover:border-teal-400 hover:bg-gray-50'
-                      }`}
-                      onDragOver={(e) => handleDragOver(e, floor.id)}
-                      onDragLeave={(e) => handleDragLeave(e, floor.id)}
-                      onDrop={(e) => handleDrop(e, floor.id)}
-                      onClick={() => triggerMultipleFileSelect(floor.id, 'gallery')}
-                    >
-                      <Upload className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                      <p className="text-sm text-gray-600 mb-2">
-                        <span className="font-medium text-teal-600">클릭하여 여러 장 선택</span> 또는 드래그 앤 드롭
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        최대 {5 - floor.photos.length}장 추가 가능 • JPG, PNG 등 이미지 파일
-                      </p>
-                    </div>
+                    {/* 업로드 진행률 표시 */}
+                    {uploadingStates[floor.id] && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Upload className="h-4 w-4 text-blue-600 animate-pulse" />
+                          <span className="text-sm font-medium text-blue-700">
+                            FormData 업로드 진행 중... {uploadProgress[floor.id] || 0}%
+                          </span>
+                        </div>
+                        <div className="w-full bg-blue-200 rounded-full h-2">
+                          <div 
+                            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${uploadProgress[floor.id] || 0}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* 업로드 버튼들 */}
                     <div className="grid grid-cols-2 gap-3">
@@ -730,7 +1006,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         disabled={uploadingStates[floor.id]}
                         className={`flex items-center justify-center gap-2 rounded-lg p-3 cursor-pointer touch-target text-sm font-medium transition-colors ${
                           uploadingStates[floor.id]
-                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-2 border-gray-300'
                             : 'bg-white border-2 border-teal-500 text-teal-600 hover:bg-teal-50'
                         }`}
                       >
@@ -742,7 +1018,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         ) : (
                           <>
                             <FolderOpen className="h-5 w-5" />
-                            <span>갤러리에서 선택</span>
+                            <span>갤러리에서 여러 장 선택</span>
                           </>
                         )}
                       </button>
@@ -753,46 +1029,43 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         disabled={uploadingStates[floor.id]}
                         className={`flex items-center justify-center gap-2 rounded-lg p-3 cursor-pointer touch-target text-sm font-medium transition-colors ${
                           uploadingStates[floor.id]
-                            ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                            ? 'bg-gray-400 text-gray-300 cursor-not-allowed'
                             : 'bg-teal-500 text-white hover:bg-teal-600'
                         }`}
                       >
                         {uploadingStates[floor.id] ? (
                           <>
-                            <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-200 border-t-transparent"></div>
+                            <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-300 border-t-transparent"></div>
                             <span>선택 중...</span>
                           </>
                         ) : (
                           <>
                             <Camera className="h-5 w-5" />
-                            <span>카메라로 촬영</span>
+                            <span>카메라 촬영</span>
                           </>
                         )}
                       </button>
                     </div>
 
-                    {/* 개선된 도움말 */}
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    {/* 개선된 안내 */}
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                       <div className="flex items-start gap-2">
-                        <Image className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                        <div className="text-xs text-blue-700">
-                          <p className="font-medium mb-2">📸 다중 업로드 방법:</p>
+                        <Image className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                        <div className="text-xs text-green-700">
+                          <p className="font-medium mb-2">📱 다중 사진 업로드 개선됨!</p>
                           <div className="space-y-2">
                             <div className="bg-white bg-opacity-60 rounded p-2">
-                              <p className="font-medium mb-1">🖥️ PC/노트북:</p>
-                              <p>• 갤러리 버튼 클릭 후 Ctrl(Cmd) + 클릭으로 여러 장 선택</p>
-                              <p>• 드래그 앤 드롭으로 한번에 여러 장 추가</p>
+                              <p className="font-medium mb-1">✅ 다중 업로드 방법:</p>
+                              <p>• 갤러리 버튼을 누르세요</p>
+                              <p>• 여러 장 선택 후 "완료" 누르기</p>
+                              <p>• iOS에서는 사진마다 개별 업로드됨</p>
                             </div>
                             <div className="bg-white bg-opacity-60 rounded p-2">
-                              <p className="font-medium mb-1">📱 모바일:</p>
-                              <p>• 갤러리에서 다중 선택 (기기에 따라 지원)</p>
-                              <p>• 한 번에 안 되면 여러 번 나누어서 업로드</p>
+                              <p className="font-medium mb-1">📱 최적화된 방식:</p>
+                              <p>• iOS: 사진 개별 처리 로직 추가</p>
+                              <p>• Android: FormData 배열 사용</p>
+                              <p>• 최대 5장, 각 10MB까지 업로드</p>
                             </div>
-                          </div>
-                          <div className="mt-2 pt-2 border-t border-blue-200">
-                            <p className="text-xs text-blue-600">
-                              💡 한 번에 최대 5장까지, 각 파일 최대 10MB
-                            </p>
                           </div>
                         </div>
                       </div>
@@ -808,23 +1081,8 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                     type="button"
                     onClick={() => handleAddFloorAfter(index)}
                     className="flex items-center gap-1 text-teal-600 hover:text-teal-700 hover:bg-teal-50 px-2 py-1 rounded text-xs font-medium touch-target"
-                    title="이 층 다음에 새 층 추가"
                   >
                     <Plus className="h-3 w-3" />
-                    다음 층 추가
-                  </button>
-                </div>
-              )}
-
-              {/* 층별 하단 액션 버튼들 */}
-              {floor.isCompleted && (
-                <div className="flex gap-2 pt-3 border-t border-gray-200">
-                  <button
-                    type="button"
-                    onClick={() => handleAddFloorAfter(index)}
-                    className="flex items-center gap-1 text-teal-600 hover:text-teal-700 text-sm font-medium touch-target"
-                  >
-                    <Plus className="h-4 w-4" />
                     다음 층 추가
                   </button>
                 </div>
@@ -855,7 +1113,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
             className="w-full flex items-center justify-center gap-2 bg-teal-600 text-white py-3 px-4 rounded-lg text-sm font-medium hover:bg-teal-700 touch-target"
           >
             <Save className="h-5 w-5" />
-            저장하기
+            서버 업로드 방식으로 저장하기
           </button>
         </div>
 

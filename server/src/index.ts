@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import presignRoutes from './routes/presign';
 import recordsRoutes from './routes/records';
+import photosRoutes from './routes/photos';
 
 // Load environment variables
 dotenv.config();
@@ -31,6 +32,7 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/presign', presignRoutes);
 app.use('/api/records', recordsRoutes);
+app.use('/api/photos', photosRoutes);
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -57,6 +59,7 @@ const server = app.listen(PORT, () => {
   console.log(`📋 Health check: http://localhost:${PORT}/health`);
   console.log(`📸 Presign API: http://localhost:${PORT}/api/presign`);
   console.log(`📊 Records API: http://localhost:${PORT}/api/records`);
+  console.log(`📸 Photos API: http://localhost:${PORT}/api/photos`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 

@@ -1,6 +1,6 @@
 export interface Photo {
   id: string;
-  data?: string; // Base64 encoded image data (legacy, for backward compatibility)
+  data?: string; // 백워드 호환성을 위해 optional - 새로운 시스템에서는 IndexedDB Blob 사용
   name: string;
   timestamp?: number; // 사진 업로드 시간
   blobUrl?: string; // Blob URL for display (temporary)
