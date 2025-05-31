@@ -22,6 +22,11 @@ const getAPIBaseURL = () => {
 const API_BASE_URL = getAPIBaseURL();
 console.log('🌐 API 경로:', API_BASE_URL);
 
+// 디버깅 도우미
+const debugLog = (message: string, data?: any) => {
+  console.log(`[DEBUG] ${message}`, data || '');
+};
+
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
     id: '',
@@ -250,10 +255,13 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           const file = files[i];
           const photoId = generateId();
           
+          debugLog(`파일 ${i+1} 처리 시작:`, { name: file.name, size: file.size, type: file.type });
+          
           // 로컬 파일 처리 (압축 및 Blob URL 생성)
           const success = await saveCompressedPhoto(file, photoId, formData.id, floorId);
           
           if (success) {
+            debugLog(`파일 ${i+1} 압축 성공, URL 생성 시도`);
             // URL 가져오기
             const photoUrl = await getPhotoUrl(photoId);
             
@@ -267,11 +275,13 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
               };
               
               results.push(photo);
-              console.log(`파일 ${i+1} 로컬 처리 완료:`, photo.name);
+              debugLog(`파일 ${i+1} 로컬 처리 완료:`, photo.name);
             } else {
+              debugLog(`파일 ${i+1} URL 생성 실패`);
               throw new Error('URL 생성 실패');
             }
           } else {
+            debugLog(`파일 ${i+1} 압축/저장 실패`);
             throw new Error('압축/저장 실패');
           }
         } catch (err) {
@@ -387,7 +397,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         return;
       }
       
-      console.log('=== 모바일 다중 선택 성공 ===');
+      console.log('=== 파일 선택 성공 ===');
       console.log('선택된 파일:', filesArray.map(f => ({ name: f.name, size: f.size })));
       console.log('브라우저:', navigator.userAgent);
       console.log('입력 타입:', inputType);
@@ -395,69 +405,43 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       setUploadProgress(prev => ({ ...prev, [floorId]: 10 }));
       
       try {
-        // FormData 방식으로 서버에 업로드
         toast({
-          title: `🚀 ${filesArray.length}장 서버 업로드 시작`,
-          description: "FormData + array 방식으로 처리합니다...",
+          title: `🔄 ${filesArray.length}장 로컬 처리 시작`,
+          description: "압축 및 저장 중...",
           duration: 3000
         });
-        
-        setUploadProgress(prev => ({ ...prev, [floorId]: 30 }));
-
-        console.log('=== 모바일 다중 선택 성공 ===');
-        console.log('선택된 파일:', filesArray.map(f => ({ name: f.name, size: f.size })));
-        console.log('브라우저:', navigator.userAgent);
-        console.log('입력 타입:', inputType);
-        console.log('연결할 서버 URL:', API_BASE_URL);
         
         // 파일 크기 점검
         const totalSizeMB = filesArray.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024);
         console.log(`총 파일 크기: ${totalSizeMB.toFixed(2)}MB`);
         
-        // 업로드 상태를 10%로 설정하고 화면에 표시
-        setUploadProgress(prev => ({ ...prev, [floorId]: 10 }));
-        
         try {
-          // FormData 방식으로 서버에 업로드
-          toast({
-            title: `🚀 ${filesArray.length}장 서버 업로드 시작`,
-            description: `총 ${totalSizeMB.toFixed(1)}MB, 서버: ${API_BASE_URL}`,
-            duration: 3000
-          });
-          
-          // 업로드 상태를 30%로 업데이트하고 사용자에게 진행 상황 표시
-          setUploadProgress(prev => ({ ...prev, [floorId]: 30 }));
-          
           let uploadedPhotos: Photo[] = [];
           
-          // 모바일 기기에 따른 업로드 전략 분기
+          // iOS에서 여러 장일 경우 각각 개별 처리
           if (isIOS && filesArray.length > 1) {
-            // iOS에서 여러 장일 경우 각각 개별 업로드 시도 (대안 전략)
-            console.log('iOS에서 개별 업로드 전략 사용');
+            console.log('iOS에서 개별 처리 전략 사용');
             const allUploadedPhotos: Photo[] = [];
             
             for (let i = 0; i < filesArray.length; i++) {
-              setUploadProgress(prev => ({ ...prev, [floorId]: 30 + Math.floor((i / filesArray.length) * 50) }));
+              setUploadProgress(prev => ({
+                ...prev,
+                [floorId]: 30 + Math.floor((i / filesArray.length) * 50)
+              }));
+              
               try {
-                // 각 파일을 개별적으로 업로드
                 const singleFileArray = [filesArray[i]];
                 const result = await uploadPhotosToServer(floorId, singleFileArray);
                 allUploadedPhotos.push(...result);
-                console.log(`iOS 개별 업로드 ${i+1}/${filesArray.length} 성공:`, result);
+                console.log(`iOS 개별 처리 ${i+1}/${filesArray.length} 성공:`, result);
               } catch (error) {
-                console.error(`파일 ${i+1} 개별 업로드 실패:`, error);
-                toast({
-                  title: `파일 ${i+1} 업로드 실패`,
-                  description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
-                  variant: "destructive",
-                  duration: 2000
-                });
+                console.error(`파일 ${i+1} 개별 처리 실패:`, error);
               }
             }
             
             uploadedPhotos = allUploadedPhotos;
           } else {
-            // 표준 방식: 모든 파일을 한번에 업로드
+            // 표준 방식: 모든 파일을 한번에 처리
             uploadedPhotos = await uploadPhotosToServer(floorId, filesArray);
           }
           
@@ -471,23 +455,23 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
             ]);
             
             toast({
-              title: "업로드 성공",
-              description: `${uploadedPhotos.length}장의 사진이 성공적으로 업로드되었습니다.`,
+              title: "저장 성공",
+              description: `${uploadedPhotos.length}장의 사진이 성공적으로 저장되었습니다.`,
               duration: 3000
             });
           } else {
             toast({
-              title: "업로드 실패",
-              description: "사진을 업로드하지 못했습니다. 다시 시도해주세요.",
+              title: "처리 실패",
+              description: "사진을 저장하지 못했습니다. 다시 시도해주세요.",
               variant: "destructive",
               duration: 3000
             });
           }
         } catch (error) {
-          console.error('파일 업로드 처리 오류:', error);
+          console.error('파일 처리 오류:', error);
           toast({
-            title: "업로드 실패",
-            description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
+            title: "처리 실패",
+            description: error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.",
             variant: "destructive",
             duration: 4000
           });
@@ -499,10 +483,10 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           }, 1000);
         }
       } catch (error) {
-        console.error('파일 업로드 처리 오류:', error);
+        console.error('파일 처리 오류:', error);
         toast({
-          title: "업로드 실패",
-          description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
+          title: "처리 실패",
+          description: error instanceof Error ? error.message : "처리 중 오류가 발생했습니다.",
           variant: "destructive",
           duration: 4000
         });
@@ -834,7 +818,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         {uploadingStates[floor.id] ? (
                           <>
                             <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-400 border-t-transparent"></div>
-                            <span>선택 중...</span>
+                            <span>처리 중...</span>
                           </>
                         ) : (
                           <>
@@ -857,7 +841,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         {uploadingStates[floor.id] ? (
                           <>
                             <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-300 border-t-transparent"></div>
-                            <span>선택 중...</span>
+                            <span>처리 중...</span>
                           </>
                         ) : (
                           <>
@@ -934,7 +918,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
             className="w-full flex items-center justify-center gap-2 bg-teal-600 text-white py-3 px-4 rounded-lg text-sm font-medium hover:bg-teal-700 touch-target"
           >
             <Save className="h-5 w-5" />
-            로컬 저장 방식으로 저장하기
+            정보 저장하기
           </button>
         </div>
 
