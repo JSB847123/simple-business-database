@@ -13,9 +13,26 @@ interface LocationFormProps {
   onCancel: () => void;
 }
 
-// 모바일 사진 업로드 문제 해결: 항상 상대 경로 사용
-// PWA에서 localhost는 스마트폰 자체를 가리키므로 절대 상대 경로만 사용해야 함
-const API_BASE_URL = '/api';
+// 모바일에서 API 서버 연결 문제 해결: 개발 환경과 프로덕션 환경을 구분
+const getAPIBaseURL = () => {
+  // 네트워크 접속 시 IP 주소 감지 (개발 환경)
+  if (/^192\.168\./.test(window.location.hostname) || 
+      /^172\./.test(window.location.hostname) || 
+      /^10\./.test(window.location.hostname)) {
+    return `http://${window.location.hostname}:3001/api`;
+  }
+  
+  // localhost 접속 시 (개발 환경)
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:3001/api';
+  }
+  
+  // 그 외 환경에서는 상대 경로 사용 (프로덕션)
+  return '/api';
+};
+
+const API_BASE_URL = getAPIBaseURL();
+console.log('🌐 API 서버 URL:', API_BASE_URL);
 
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
@@ -296,8 +313,19 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         body: formDataObj,
       });
       
+      console.log(`요청 정보: ${API_BASE_URL}/photos${endpoint}`, {
+        상태: response.status,
+        헤더: Object.fromEntries([...response.headers.entries()]),
+        URL: response.url
+      });
+      
       if (!response.ok) {
         const errorText = await response.text();
+        console.error('업로드 실패 응답:', {
+          status: response.status,
+          statusText: response.statusText,
+          responseText: errorText
+        });
         throw new Error(`업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
       }
       
