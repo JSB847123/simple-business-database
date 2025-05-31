@@ -13,7 +13,8 @@ interface LocationFormProps {
   onCancel: () => void;
 }
 
-const API_BASE_URL = 'http://localhost:3001/api';
+// 클라이언트와 서버의 포트 차이 해결을 위해 전체 URL 사용
+const API_BASE_URL = 'http://192.168.1.139:3001/api';
 
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
@@ -320,64 +321,71 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     }
     console.log(`총 ${photoKey} 관련 엔트리: ${photoCount}개`);
     
-    // 요청 헤더를 명시적으로 설정하지 않음 (브라우저가 자동으로 multipart/form-data 설정)
-    const response = await fetch(`${API_BASE_URL}/photos${endpoint}`, {
-      method: 'POST',
-      body: formDataObj,
-    });
-    
-    if (!response.ok) {
-      try {
-        const errorData = await response.json();
-        throw new Error(`${photoKey} 키 업로드 실패: ${errorData.message || `HTTP ${response.status}`}`);
-      } catch (jsonError) {
-        // JSON 파싱 실패 시 일반 텍스트로 시도
-        const errorText = await response.text();
-        throw new Error(`업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
-      }
-    }
-    
-    let result;
+    // 모바일 기기에서 fetch 요청이 실패하는 문제 해결
     try {
-      result = await response.json();
+      // 요청 헤더를 명시적으로 설정하지 않음 (브라우저가 자동으로 multipart/form-data 설정)
+      const response = await fetch(`${API_BASE_URL}/photos${endpoint}`, {
+        method: 'POST',
+        body: formDataObj,
+        // 명시적으로 credentials 옵션 제거
+      });
+      
+      if (!response.ok) {
+        try {
+          const errorData = await response.json();
+          throw new Error(`${photoKey} 키 업로드 실패: ${errorData.message || `HTTP ${response.status}`}`);
+        } catch (jsonError) {
+          // JSON 파싱 실패 시 일반 텍스트로 시도
+          const errorText = await response.text();
+          throw new Error(`업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
+        }
+      }
+      
+      let result;
+      try {
+        result = await response.json();
+      } catch (error) {
+        console.error('서버 응답 파싱 오류:', error);
+        throw new Error('서버 응답을 해석할 수 없습니다');
+      }
+      
+      console.log(`=== 서버 응답 분석 (${photoKey} 키) ===`);
+      console.log('전체 응답:', result);
+      console.log('성공 여부:', result.success);
+      console.log('서버가 처리한 파일 수:', result.data?.count || 0);
+      console.log('서버 응답 사진 배열:', result.data?.photos?.length || 0);
+      
+      if (!result.success) {
+        throw new Error(result.message || '업로드 실패');
+      }
+      
+      // 🔍 응답 데이터 검증
+      const serverPhotos = result.data.photos;
+      if (!Array.isArray(serverPhotos)) {
+        throw new Error('서버 응답에서 photos 배열을 찾을 수 없습니다.');
+      }
+      
+      if (serverPhotos.length !== files.length) {
+        console.warn(`⚠️ 파일 수 불일치: 보낸 파일 ${files.length}개, 받은 응답 ${serverPhotos.length}개`);
+      }
+      
+      // 서버에서 받은 데이터를 Photo 타입으로 변환
+      const convertedPhotos = serverPhotos.map((serverPhoto: any, index: number): Photo => {
+        console.log(`사진 ${index + 1} 변환:`, serverPhoto.name);
+        return {
+          id: serverPhoto.id,
+          name: serverPhoto.name,
+          data: `${API_BASE_URL}/photos${serverPhoto.url}`, // 서버 URL
+          timestamp: serverPhoto.timestamp
+        };
+      });
+      
+      console.log(`✅ 최종 변환된 사진 수: ${convertedPhotos.length}개`);
+      return convertedPhotos;
     } catch (error) {
-      console.error('서버 응답 파싱 오류:', error);
-      throw new Error('서버 응답을 해석할 수 없습니다');
+      console.error('파일 업로드 실패:', error);
+      throw error;
     }
-    
-    console.log(`=== 서버 응답 분석 (${photoKey} 키) ===`);
-    console.log('전체 응답:', result);
-    console.log('성공 여부:', result.success);
-    console.log('서버가 처리한 파일 수:', result.data?.count || 0);
-    console.log('서버 응답 사진 배열:', result.data?.photos?.length || 0);
-    
-    if (!result.success) {
-      throw new Error(result.message || '업로드 실패');
-    }
-    
-    // 🔍 응답 데이터 검증
-    const serverPhotos = result.data.photos;
-    if (!Array.isArray(serverPhotos)) {
-      throw new Error('서버 응답에서 photos 배열을 찾을 수 없습니다.');
-    }
-    
-    if (serverPhotos.length !== files.length) {
-      console.warn(`⚠️ 파일 수 불일치: 보낸 파일 ${files.length}개, 받은 응답 ${serverPhotos.length}개`);
-    }
-    
-    // 서버에서 받은 데이터를 Photo 타입으로 변환
-    const convertedPhotos = serverPhotos.map((serverPhoto: any, index: number): Photo => {
-      console.log(`사진 ${index + 1} 변환:`, serverPhoto.name);
-      return {
-        id: serverPhoto.id,
-        name: serverPhoto.name,
-        data: `${API_BASE_URL}/photos${serverPhoto.url}`, // 서버 URL
-        timestamp: serverPhoto.timestamp
-      };
-    });
-    
-    console.log(`✅ 최종 변환된 사진 수: ${convertedPhotos.length}개`);
-    return convertedPhotos;
   };
 
   // 개선된 다중 파일 선택 및 업로드
@@ -405,6 +413,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     } else {
       // 갤러리 모드에서는 다중 선택 활성화
       input.multiple = true;
+      // 캡처 속성 제거
       input.removeAttribute('capture');
     }
     
@@ -425,78 +434,16 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       });
     }, 30000);
     
-    // 🔥 파일 선택 다이얼로그가 닫혔을 때 감지 (개선된 버전)
-    let fileSelectionHandled = false;
-    
-    // Focus 이벤트 리스너
-    const handleWindowFocus = () => {
-      console.log('Window focus detected');
-      setTimeout(() => {
-        if (!fileSelectionHandled && uploadingStates[floorId]) {
-          console.log('파일 선택 다이얼로그 닫힘 감지 (focus) - 파일 확인 중...');
-          if (!input.files || input.files.length === 0) {
-            console.log('파일이 선택되지 않음 - 상태 리셋');
-            clearTimeout(timeoutId);
-            setUploadingStates(prev => ({ ...prev, [floorId]: false }));
-            setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
-          }
-        }
-      }, 500);
-    };
-    
-    // Visibility change 이벤트 리스너 (모바일용)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && !fileSelectionHandled && uploadingStates[floorId]) {
-        console.log('Visibility change detected - visible');
-        setTimeout(() => {
-          if (!fileSelectionHandled && uploadingStates[floorId]) {
-            console.log('파일 선택 다이얼로그 닫힘 감지 (visibility) - 파일 확인 중...');
-            if (!input.files || input.files.length === 0) {
-              console.log('파일이 선택되지 않음 - 상태 리셋');
-              clearTimeout(timeoutId);
-              setUploadingStates(prev => ({ ...prev, [floorId]: false }));
-              setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
-            }
-          }
-        }, 500);
-      }
-    };
-    
-    // 이벤트 리스너 등록
-    window.addEventListener('focus', handleWindowFocus);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    // 클린업 함수
-    const cleanup = () => {
-      window.removeEventListener('focus', handleWindowFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-    
+    // 파일 선택 완료 핸들러
     input.onchange = async (e) => {
-      fileSelectionHandled = true;
       clearTimeout(timeoutId);
-      cleanup();
       
       const target = e.target as HTMLInputElement;
       
       console.log('파일 선택 이벤트 발생');
       console.log('선택된 파일 수:', target.files?.length || 0);
       
-      // 강화된 디버깅 로깅
-      if (target.files && target.files.length > 0) {
-        console.log('선택된 파일 목록:', Array.from(target.files).map(f => f.name).join(', '));
-        
-        // 각 파일의 세부 정보 로깅
-        Array.from(target.files).forEach((file, idx) => {
-          console.log(`파일 ${idx+1} 세부정보:`, {
-            name: file.name,
-            size: `${Math.round(file.size / 1024)}KB`,
-            type: file.type,
-            lastModified: new Date(file.lastModified).toISOString()
-          });
-        });
-      }
-      
+      // 파일 선택 취소 또는 없음
       if (!target.files || target.files.length === 0) {
         console.log('파일이 선택되지 않음');
         setUploadingStates(prev => ({ ...prev, [floorId]: false }));
@@ -577,94 +524,51 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
           
           uploadedPhotos = allUploadedPhotos;
         } else {
-          // 일반적인 경우 모든 파일 한 번에 업로드
+          // 표준 방식: 모든 파일을 한번에 업로드
           uploadedPhotos = await uploadPhotosToServer(floorId, filesArray);
         }
         
-        setUploadProgress(prev => ({ ...prev, [floorId]: 80 }));
+        setUploadProgress(prev => ({ ...prev, [floorId]: 90 }));
         
-        // 성공적으로 업로드된 사진들을 상태에 추가
-        console.log('=== 상태 업데이트 시작 ===');
-        console.log('기존 사진 수:', floor.photos.length);
-        console.log('새로 업로드된 사진 수:', uploadedPhotos.length);
-        console.log('업데이트 후 예상 총 사진 수:', floor.photos.length + uploadedPhotos.length);
-        
-        handleFloorChange(floorId, 'photos', [...floor.photos, ...uploadedPhotos]);
-        
-        // 상태 업데이트 검증을 위해 약간의 지연 후 확인
-        setTimeout(() => {
-          const updatedFloor = formData.floors.find(f => f.id === floorId);
-          console.log('=== 상태 업데이트 결과 ===');
-          console.log('실제 업데이트된 사진 수:', updatedFloor?.photos.length || 0);
-          console.log('업데이트된 사진 목록:', updatedFloor?.photos.map(p => p.name) || []);
-        }, 100);
-        
-        setUploadProgress(prev => ({ ...prev, [floorId]: 100 }));
-        
-        toast({
-          title: "🎉 업로드 완료!",
-          description: `${uploadedPhotos.length}장이 서버에 성공적으로 업로드되었습니다.`,
-          duration: 4000
-        });
-        
-        console.log('업로드 완료:', uploadedPhotos);
-        
+        if (uploadedPhotos.length > 0) {
+          // 성공한 사진들을 층 데이터에 추가
+          handleFloorChange(floorId, 'photos', [
+            ...floor.photos,
+            ...uploadedPhotos
+          ]);
+          
+          toast({
+            title: "업로드 성공",
+            description: `${uploadedPhotos.length}장의 사진이 성공적으로 업로드되었습니다.`,
+            duration: 3000
+          });
+        } else {
+          toast({
+            title: "업로드 실패",
+            description: "사진을 업로드하지 못했습니다. 다시 시도해주세요.",
+            variant: "destructive",
+            duration: 3000
+          });
+        }
       } catch (error) {
-        console.error('업로드 실패:', error);
+        console.error('파일 업로드 처리 오류:', error);
         toast({
-          title: "❌ 업로드 실패",
-          description: error instanceof Error ? error.message : "서버 업로드 중 오류가 발생했습니다.",
+          title: "업로드 실패",
+          description: error instanceof Error ? error.message : "업로드 중 오류가 발생했습니다.",
           variant: "destructive",
           duration: 4000
         });
       } finally {
-        // 🔥 무조건 상태 리셋 (성공/실패 여부와 관계없이)
         setUploadingStates(prev => ({ ...prev, [floorId]: false }));
-        setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
-        console.log('업로드 프로세스 종료 - 상태 리셋 완료');
+        setUploadProgress(prev => ({ ...prev, [floorId]: 100 }));
+        setTimeout(() => {
+          setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
+        }, 1000);
       }
     };
     
-    // 🔥 에러 핸들러 추가
-    input.onerror = () => {
-      console.error('파일 선택 에러 발생');
-      fileSelectionHandled = true;
-      clearTimeout(timeoutId);
-      cleanup();
-      setUploadingStates(prev => ({ ...prev, [floorId]: false }));
-      setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
-      toast({
-        title: "❌ 오류 발생",
-        description: "파일 선택 중 문제가 발생했습니다.",
-        variant: "destructive",
-        duration: 3000
-      });
-    };
-    
-    // 🔥 abort 핸들러 추가
-    input.onabort = () => {
-      console.log('파일 선택 중단됨');
-      fileSelectionHandled = true;
-      clearTimeout(timeoutId);
-      cleanup();
-      setUploadingStates(prev => ({ ...prev, [floorId]: false }));
-      setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
-    };
-    
-    // 파일 선택 다이얼로그 열기
-    try {
-      input.click();
-    } catch (error) {
-      console.error('파일 선택 다이얼로그 열기 실패:', error);
-      clearTimeout(timeoutId);
-      cleanup();
-      toast({
-        title: "❌ 오류",
-        description: "파일 선택 창을 열 수 없습니다.",
-        variant: "destructive",
-        duration: 3000
-      });
-    }
+    // 파일 선택 다이얼로그 표시
+    input.click();
   };
 
   const handleRemovePhoto = async (floorId: string, photoId: string) => {
