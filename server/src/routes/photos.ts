@@ -15,6 +15,7 @@ if (!fs.existsSync(uploadsDir)) {
 // Multer 설정 - 메모리 스토리지 사용 (나중에 S3로 업로드)
 const storage = multer.memoryStorage();
 
+// 📸 강화된 multer 설정 - 더 많은 필드 이름 허용
 const upload = multer({
   storage,
   limits: {
@@ -30,6 +31,18 @@ const upload = multer({
     }
   },
 });
+
+// 📁 파일 필드 정의 - 다양한 브라우저/환경 지원
+const fileFields = [
+  { name: 'photos[]', maxCount: 5 },
+  { name: 'photos', maxCount: 5 },
+  { name: 'photo', maxCount: 5 },
+  { name: 'file', maxCount: 5 },
+  { name: 'files', maxCount: 5 },
+  { name: 'files[]', maxCount: 5 },
+  { name: 'images', maxCount: 5 },
+  { name: 'images[]', maxCount: 5 }
+];
 
 // 🚀 다중 파일 업로드 API - FormData + array 방식
 router.post('/upload-multiple', upload.array('photos[]', 5), async (req: Request, res: Response): Promise<void> => {
@@ -322,6 +335,106 @@ router.delete('/:photoId', async (req: Request, res: Response): Promise<void> =>
       success: false,
       error: 'Delete failed',
       message: error instanceof Error ? error.message : '파일 삭제 중 오류가 발생했습니다.'
+    });
+  }
+});
+
+// 🌟 새로운 범용 업로드 엔드포인트 - 모든 가능한 키 이름 허용
+router.post('/upload-universal', upload.fields(fileFields), async (req: Request, res: Response): Promise<void> => {
+  try {
+    console.log('=== 범용 업로드 라우트 호출됨 ===');
+    console.log('요청 헤더:', {
+      contentType: req.headers['content-type'],
+      contentLength: req.headers['content-length'],
+      userAgent: req.headers['user-agent']
+    });
+    
+    // FormData 필드 로깅
+    console.log('FormData 필드:', Object.keys(req.body));
+    
+    // req.files 객체 분석
+    const filesObj = req.files as { [fieldname: string]: Express.Multer.File[] };
+    
+    if (!filesObj || Object.keys(filesObj).length === 0) {
+      console.error('❌ 파일이 감지되지 않음:', req.files);
+      res.status(400).json({
+        success: false,
+        error: 'No files detected',
+        message: '업로드된 파일을 찾을 수 없습니다.',
+        debug: {
+          contentType: req.headers['content-type'],
+          bodyKeys: Object.keys(req.body),
+          filesType: typeof req.files
+        }
+      });
+      return;
+    }
+    
+    // 각 필드에서 파일 추출
+    const allFiles: Express.Multer.File[] = [];
+    for (const [fieldName, files] of Object.entries(filesObj)) {
+      console.log(`필드 ${fieldName}에서 ${files.length}개 파일 발견`);
+      allFiles.push(...files);
+    }
+    
+    console.log(`총 ${allFiles.length}개 파일 업로드됨`);
+    
+    const { locationId, floorId } = req.body;
+    
+    if (!locationId || !floorId) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'locationId와 floorId가 필요합니다.'
+      });
+      return;
+    }
+    
+    const uploadedPhotos = [];
+    
+    // 각 파일 처리
+    for (const [index, file] of allFiles.entries()) {
+      console.log(`처리 중 ${index + 1}/${allFiles.length}: ${file.originalname}`);
+      
+      const photoId = uuidv4();
+      const fileExtension = path.extname(file.originalname) || '.jpg';
+      const fileName = `${photoId}${fileExtension}`;
+      const filePath = path.join(uploadsDir, fileName);
+      
+      // 임시로 로컬에 저장
+      await fs.promises.writeFile(filePath, file.buffer);
+      
+      const photoData = {
+        id: photoId,
+        name: file.originalname,
+        fileName: fileName,
+        size: file.size,
+        mimetype: file.mimetype,
+        locationId,
+        floorId,
+        url: `/uploads/${fileName}`,
+        timestamp: Date.now()
+      };
+      
+      uploadedPhotos.push(photoData);
+      console.log(`✅ 파일 처리 완료 ${index + 1}/${allFiles.length}: ${file.originalname} -> ${fileName}`);
+    }
+    
+    res.json({
+      success: true,
+      message: `${uploadedPhotos.length}개 파일이 성공적으로 업로드되었습니다.`,
+      data: {
+        photos: uploadedPhotos,
+        count: uploadedPhotos.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('범용 업로드 오류:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Universal upload failed',
+      message: error instanceof Error ? error.message : '파일 업로드 중 오류가 발생했습니다.'
     });
   }
 });

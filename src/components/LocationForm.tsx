@@ -247,45 +247,165 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       files: files.length
     });
     
-    // 먼저 photos[] 키로 시도
+    // 🌟 범용 업로드 엔드포인트 먼저 시도 (모든 파일 필드명 지원)
     try {
-      console.log('1️⃣ photos[] 키로 업로드 시도...');
-      return await uploadWithKey(floorId, files, 'photos[]', '/upload-multiple');
-    } catch (error) {
-      console.warn('photos[] 키 업로드 실패, photos 키로 재시도:', error);
+      console.log('🚀 범용 업로드 엔드포인트 시도...');
       
-      // 대안으로 photos 키로 시도
-      try {
-        console.log('2️⃣ photos 키로 업로드 재시도...');
-        return await uploadWithKey(floorId, files, 'photos', '/upload-multiple-alt');
-      } catch (fallbackError) {
-        console.error('모든 업로드 방식 실패:', fallbackError);
+      // iOS에서 다중 파일 처리 방식 분기
+      if (isIOS && files.length > 1) {
+        console.log('iOS에서 각 파일 개별 업로드 시작');
+        // iOS에서는 여러 파일 선택 시 각각 개별 업로드
+        const results: Photo[] = [];
         
-        // 다른 모든 방식이 실패하면 마지막으로 각 파일 개별 업로드 시도
-        if (files.length > 1) {
-          console.log('3️⃣ 마지막 시도: 각 파일 개별 업로드...');
-          const results: Photo[] = [];
-          
-          for (let i = 0; i < files.length; i++) {
-            try {
-              const singleFile = [files[i]];
-              const result = await uploadWithKey(floorId, singleFile, 'photo', '/upload-single');
-              if (result && result.length > 0) {
-                results.push(result[0]);
-              }
-            } catch (singleError) {
-              console.error(`개별 파일 ${i} 업로드 실패:`, singleError);
+        for (let i = 0; i < files.length; i++) {
+          try {
+            const singleFile = [files[i]];
+            // 각 파일을 하나씩 범용 엔드포인트로 업로드
+            setUploadProgress(prev => ({ 
+              ...prev, 
+              [floorId]: Math.floor(30 + ((i / files.length) * 60))
+            }));
+            
+            const result = await uploadToUniversalEndpoint(floorId, singleFile);
+            if (result && result.length > 0) {
+              results.push(result[0]);
             }
-          }
-          
-          if (results.length > 0) {
-            console.log(`✅ 개별 업로드 부분 성공: ${results.length}/${files.length} 파일 업로드됨`);
-            return results;
+            console.log(`iOS 개별 업로드 ${i+1}/${files.length} 성공`);
+          } catch (singleError) {
+            console.error(`iOS 개별 업로드 ${i+1} 실패:`, singleError);
           }
         }
         
-        throw fallbackError;
+        if (results.length > 0) {
+          console.log(`✅ iOS 개별 업로드 성공: ${results.length}/${files.length} 파일`);
+          return results;
+        }
+        throw new Error('iOS 개별 업로드 실패');
       }
+      
+      // 안드로이드 또는 기타 환경에서는 한 번에 모든 파일 업로드
+      return await uploadToUniversalEndpoint(floorId, files);
+    } catch (universalError) {
+      console.warn('범용 업로드 실패, 기존 방식으로 재시도:', universalError);
+      
+      // 기존 업로드 방식으로 폴백
+      try {
+        console.log('1️⃣ photos[] 키로 업로드 시도...');
+        return await uploadWithKey(floorId, files, 'photos[]', '/upload-multiple');
+      } catch (error) {
+        console.warn('photos[] 키 업로드 실패, photos 키로 재시도:', error);
+        
+        // 대안으로 photos 키로 시도
+        try {
+          console.log('2️⃣ photos 키로 업로드 재시도...');
+          return await uploadWithKey(floorId, files, 'photos', '/upload-multiple-alt');
+        } catch (fallbackError) {
+          console.error('모든 업로드 방식 실패:', fallbackError);
+          
+          // 다른 모든 방식이 실패하면 마지막으로 각 파일 개별 업로드 시도
+          if (files.length > 1) {
+            console.log('3️⃣ 마지막 시도: 각 파일 개별 업로드...');
+            const results: Photo[] = [];
+            
+            for (let i = 0; i < files.length; i++) {
+              try {
+                const singleFile = [files[i]];
+                const result = await uploadWithKey(floorId, singleFile, 'photo', '/upload-single');
+                if (result && result.length > 0) {
+                  results.push(result[0]);
+                }
+              } catch (singleError) {
+                console.error(`개별 파일 ${i} 업로드 실패:`, singleError);
+              }
+            }
+            
+            if (results.length > 0) {
+              console.log(`✅ 개별 업로드 부분 성공: ${results.length}/${files.length} 파일 업로드됨`);
+              return results;
+            }
+          }
+          
+          throw fallbackError;
+        }
+      }
+    }
+  };
+  
+  // 새로운 범용 업로드 함수
+  const uploadToUniversalEndpoint = async (floorId: string, files: File[]): Promise<Photo[]> => {
+    const formDataObj = new FormData();
+    
+    // 모바일 브라우저별 최적화된 키 이름 사용
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const photoKey = isIOS ? 'photo' : 'photos[]';
+    
+    // 파일 추가
+    files.forEach((file, index) => {
+      formDataObj.append(photoKey, file);
+      console.log(`파일 ${index + 1} 추가: ${file.name} (${Math.round(file.size / 1024)}KB)`);
+    });
+    
+    // 필수 메타데이터 추가
+    formDataObj.append('locationId', formData.id || generateId());
+    formDataObj.append('floorId', floorId);
+    formDataObj.append('fileCount', files.length.toString());
+    formDataObj.append('deviceInfo', navigator.userAgent); // 디버깅을 위한 기기 정보 추가
+    
+    console.log(`=== 범용 엔드포인트 업로드 시작 ===`);
+    console.log('API URL:', `${API_BASE_URL}/photos/upload-universal`);
+    
+    try {
+      // fetch 요청에 모바일 환경 최적화 옵션 추가
+      const response = await fetch(`${API_BASE_URL}/photos/upload-universal`, {
+        method: 'POST',
+        body: formDataObj,
+        // CORS 문제 해결을 위한 설정
+        mode: 'cors',
+        credentials: 'include',
+        // 네트워크 최적화
+        cache: 'no-cache',
+        // 타임아웃 방지를 위한 신호 객체 - 60초
+        signal: AbortSignal.timeout(60000)
+      });
+      
+      console.log('범용 업로드 응답 상태:', response.status);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('범용 업로드 실패 응답:', {
+          status: response.status,
+          statusText: response.statusText,
+          responseText: errorText
+        });
+        throw new Error(`범용 업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
+      }
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.message || '범용 업로드 실패');
+      }
+      
+      // 응답 데이터 검증
+      const serverPhotos = result.data.photos;
+      if (!Array.isArray(serverPhotos)) {
+        throw new Error('서버 응답에서 photos 배열을 찾을 수 없습니다.');
+      }
+      
+      // 서버에서 받은 데이터를 Photo 타입으로 변환
+      const convertedPhotos = serverPhotos.map((serverPhoto: any): Photo => {
+        return {
+          id: serverPhoto.id,
+          name: serverPhoto.name,
+          data: `${API_BASE_URL}/photos${serverPhoto.url}`,
+          timestamp: serverPhoto.timestamp
+        };
+      });
+      
+      return convertedPhotos;
+    } catch (error) {
+      console.error('범용 업로드 실패:', error);
+      throw error;
     }
   };
 
@@ -963,9 +1083,9 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                             </div>
                             <div className="bg-white bg-opacity-60 rounded p-2">
                               <p className="font-medium mb-1">📱 최적화된 방식:</p>
-                              <p>• iOS: 사진 개별 처리 로직 추가</p>
-                              <p>• Android: FormData 배열 사용</p>
-                              <p>• 최대 5장, 각 10MB까지 업로드</p>
+                              <p>• iOS/Android 기기별 자동 최적화</p>
+                              <p>• 범용 업로드 엔드포인트 적용</p>
+                              <p>• 모든 파일 필드명 지원 (개선됨)</p>
                             </div>
                           </div>
                         </div>
