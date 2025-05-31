@@ -15,26 +15,12 @@ interface LocationFormProps {
 
 // 모바일에서 API 서버 연결 문제 해결: 개발 환경과 프로덕션 환경을 구분
 const getAPIBaseURL = () => {
-  // 개발 네트워크 IP 주소 (192.168.x.x, 172.x.x.x, 10.x.x.x)
-  if (/^192\.168\./.test(window.location.hostname) || 
-      /^172\./.test(window.location.hostname) || 
-      /^10\./.test(window.location.hostname)) {
-    // 모바일 기기에서 접속 시 동일한 IP 주소의 서버 포트 사용
-    return `http://${window.location.hostname}:3001/api`;
-  }
-  
-  // localhost 접속 시 (데스크톱 개발 환경)
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return 'http://localhost:3001/api';
-  }
-  
-  // 그 외 환경에서는 상대 경로 사용 (프로덕션)
-  // 단, 이 경우 서버와 클라이언트가 같은 도메인에 호스팅되어 있어야 함
+  // 개발 환경에서는 상대 경로 사용
   return '/api';
 };
 
 const API_BASE_URL = getAPIBaseURL();
-console.log('🌐 API 서버 URL:', API_BASE_URL);
+console.log('🌐 API 경로:', API_BASE_URL);
 
 const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel }) => {
   const [formData, setFormData] = useState<Location>({
@@ -235,7 +221,6 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     });
   };
 
-  // 🚀 FormData + array 방식으로 다중 파일 업로드 (모바일 최적화)
   const uploadPhotosToServer = async (floorId: string, files: File[]): Promise<Photo[]> => {
     // 기기 정보 로깅
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
@@ -247,154 +232,67 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       files: files.length
     });
     
-    // iOS에서 여러 장일 경우 각각 개별 업로드 시도
-    if (isIOS && files.length > 1) {
-      console.log('iOS에서 개별 업로드 전략 사용');
-      const allUploadedPhotos: Photo[] = [];
+    // 서버 업로드 대신 로컬 처리 방식으로 변경
+    console.log('로컬 파일 처리 시작:', files.length);
+    
+    try {
+      // 파일 압축 및 로컬 저장 처리
+      const results: Photo[] = [];
       
       for (let i = 0; i < files.length; i++) {
-        setUploadProgress(prev => ({ 
-          ...prev, 
-          [floorId]: Math.floor(30 + ((i / files.length) * 60))
-        }));
-        
         try {
-          // 각 파일을 개별적으로 업로드
-          const singleFileArray = [files[i]];
-          const result = await uploadWithKey(floorId, singleFileArray, 'photo', '/upload-single');
-          allUploadedPhotos.push(...result);
-          console.log(`iOS 개별 업로드 ${i+1}/${files.length} 성공:`, result);
-        } catch (error) {
-          console.error(`파일 ${i+1} 개별 업로드 실패:`, error);
-        }
-      }
-      
-      if (allUploadedPhotos.length > 0) {
-        console.log(`✅ iOS 개별 업로드 성공: ${allUploadedPhotos.length}/${files.length} 파일`);
-        return allUploadedPhotos;
-      }
-      
-      throw new Error('iOS 개별 업로드 실패');
-    }
-    
-    // 안드로이드 및 기타 환경에서는 일반적인 방식으로 시도
-    try {
-      console.log('1️⃣ photos[] 키로 업로드 시도...');
-      return await uploadWithKey(floorId, files, 'photos[]', '/upload-multiple');
-    } catch (error) {
-      console.warn('photos[] 키 업로드 실패, photos 키로 재시도:', error);
-      
-      // 대안으로 photos 키로 시도
-      try {
-        console.log('2️⃣ photos 키로 업로드 재시도...');
-        return await uploadWithKey(floorId, files, 'photos', '/upload-multiple-alt');
-      } catch (fallbackError) {
-        console.error('모든 업로드 방식 실패:', fallbackError);
-        
-        // 다른 모든 방식이 실패하면 마지막으로 각 파일 개별 업로드 시도
-        if (files.length > 1) {
-          console.log('3️⃣ 마지막 시도: 각 파일 개별 업로드...');
-          const results: Photo[] = [];
+          // 진행률 업데이트
+          setUploadProgress(prev => ({
+            ...prev,
+            [floorId]: Math.floor(10 + ((i / files.length) * 80))
+          }));
           
-          for (let i = 0; i < files.length; i++) {
-            try {
-              const singleFile = [files[i]];
-              const result = await uploadWithKey(floorId, singleFile, 'photo', '/upload-single');
-              if (result && result.length > 0) {
-                results.push(result[0]);
-              }
-            } catch (singleError) {
-              console.error(`개별 파일 ${i} 업로드 실패:`, singleError);
+          const file = files[i];
+          const photoId = generateId();
+          
+          // 로컬 파일 처리 (압축 및 Blob URL 생성)
+          const success = await saveCompressedPhoto(file, photoId, formData.id, floorId);
+          
+          if (success) {
+            // URL 가져오기
+            const photoUrl = await getPhotoUrl(photoId);
+            
+            if (photoUrl) {
+              // 저장된 사진 정보 생성
+              const photo: Photo = {
+                id: photoId,
+                name: file.name,
+                data: photoUrl,
+                timestamp: Date.now()
+              };
+              
+              results.push(photo);
+              console.log(`파일 ${i+1} 로컬 처리 완료:`, photo.name);
+            } else {
+              throw new Error('URL 생성 실패');
             }
+          } else {
+            throw new Error('압축/저장 실패');
           }
-          
-          if (results.length > 0) {
-            console.log(`✅ 개별 업로드 부분 성공: ${results.length}/${files.length} 파일 업로드됨`);
-            return results;
-          }
+        } catch (err) {
+          console.error(`파일 ${i+1} 처리 실패:`, err);
         }
-        
-        throw fallbackError;
-      }
-    }
-  };
-  
-  // 실제 업로드 함수
-  const uploadWithKey = async (floorId: string, files: File[], photoKey: string, endpoint: string): Promise<Photo[]> => {
-    const formDataObj = new FormData();
-    
-    // 간단한 방식으로 파일 추가
-    files.forEach((file, index) => {
-      formDataObj.append(photoKey, file);
-      console.log(`파일 ${index + 1} 추가: ${file.name} (${Math.round(file.size / 1024)}KB)`);
-    });
-    
-    // 필수 메타데이터 추가
-    formDataObj.append('locationId', formData.id || generateId());
-    formDataObj.append('floorId', floorId);
-    formDataObj.append('fileCount', files.length.toString());
-    
-    console.log(`=== FormData 업로드 시작 ===`);
-    console.log('파일 수:', files.length);
-    console.log('API URL:', `${API_BASE_URL}/photos${endpoint}`);
-    
-    try {
-      // fetch 요청에 모바일 환경 최적화 옵션 추가
-      const response = await fetch(`${API_BASE_URL}/photos${endpoint}`, {
-        method: 'POST',
-        body: formDataObj,
-        // CORS 문제 해결을 위한 설정
-        mode: 'cors',
-        credentials: 'include',
-        // 네트워크 최적화
-        cache: 'no-cache',
-        // 타임아웃 방지를 위한 신호 객체 - 60초
-        signal: AbortSignal.timeout(60000)
-      });
-      
-      console.log(`요청 정보: ${API_BASE_URL}/photos${endpoint}`, {
-        상태: response.status,
-        헤더: Object.fromEntries([...response.headers.entries()]),
-        URL: response.url
-      });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('업로드 실패 응답:', {
-          status: response.status,
-          statusText: response.statusText,
-          responseText: errorText
-        });
-        throw new Error(`업로드 실패: HTTP ${response.status} - ${errorText || '알 수 없는 오류'}`);
       }
       
-      const result = await response.json();
+      // 완료 표시
+      setUploadProgress(prev => ({ ...prev, [floorId]: 100 }));
+      setTimeout(() => {
+        setUploadProgress(prev => ({ ...prev, [floorId]: 0 }));
+      }, 1000);
       
-      console.log('서버 응답:', result);
-      
-      if (!result.success) {
-        throw new Error(result.message || '업로드 실패');
+      if (results.length === 0) {
+        throw new Error('모든 파일 처리 실패');
       }
       
-      // 응답 데이터 검증
-      const serverPhotos = result.data.photos;
-      if (!Array.isArray(serverPhotos)) {
-        throw new Error('서버 응답에서 photos 배열을 찾을 수 없습니다.');
-      }
-      
-      // 서버에서 받은 데이터를 Photo 타입으로 변환
-      const convertedPhotos = serverPhotos.map((serverPhoto: any): Photo => {
-        return {
-          id: serverPhoto.id,
-          name: serverPhoto.name,
-          data: `${API_BASE_URL}/photos${serverPhoto.url}`,
-          timestamp: serverPhoto.timestamp
-        };
-      });
-      
-      return convertedPhotos;
+      console.log(`총 ${results.length}개 파일 처리 완료`);
+      return results;
     } catch (error) {
-      console.error('파일 업로드 실패:', error);
+      console.error('파일 처리 오류:', error);
       throw error;
     }
   };
@@ -615,31 +513,23 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
     input.click();
   };
 
+  // 파일 삭제 함수 (단순화)
   const handleRemovePhoto = async (floorId: string, photoId: string) => {
     const floor = formData.floors.find(f => f.id === floorId);
     if (!floor) return;
 
     try {
-      // 서버에서 삭제
-      const response = await fetch(`${API_BASE_URL}/photos/${photoId}`, {
-        method: 'DELETE',
-        mode: 'cors',
-        credentials: 'include',
-        cache: 'no-cache'
-      });
+      // 로컬에서 삭제
+      await removePhoto(photoId);
       
-      if (response.ok) {
-        // 상태에서도 제거
-        handleFloorChange(floorId, 'photos', floor.photos.filter(p => p.id !== photoId));
-        
-        toast({
-          title: "사진 삭제됨",
-          description: "사진이 서버에서 완전히 삭제되었습니다.",
-          duration: 2000
-        });
-      } else {
-        throw new Error('서버 삭제 실패');
-      }
+      // 상태에서도 제거
+      handleFloorChange(floorId, 'photos', floor.photos.filter(p => p.id !== photoId));
+      
+      toast({
+        title: "사진 삭제됨",
+        description: "사진이 성공적으로 삭제되었습니다.",
+        duration: 2000
+      });
     } catch (error) {
       console.error('Error removing photo:', error);
       toast({
@@ -896,7 +786,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
               {/* 🚀 개선된 사진 업로드 섹션 - FormData + array 방식 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  사진 ({floor.photos.length}/5) - 서버 업로드
+                  사진 ({floor.photos.length}/5) - 로컬 저장
                 </label>
                 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
@@ -917,7 +807,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                         <div className="flex items-center gap-2 mb-2">
                           <Upload className="h-4 w-4 text-blue-600 animate-pulse" />
                           <span className="text-sm font-medium text-blue-700">
-                            FormData 업로드 진행 중... {uploadProgress[floor.id] || 0}%
+                            로컬 저장 진행 중... {uploadProgress[floor.id] || 0}%
                           </span>
                         </div>
                         <div className="w-full bg-blue-200 rounded-full h-2">
@@ -983,19 +873,19 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
                       <div className="flex items-start gap-2">
                         <Image className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
                         <div className="text-xs text-green-700">
-                          <p className="font-medium mb-2">📱 다중 사진 업로드 개선됨!</p>
+                          <p className="font-medium mb-2">📱 로컬 저장 방식으로 변경!</p>
                           <div className="space-y-2">
                             <div className="bg-white bg-opacity-60 rounded p-2">
-                              <p className="font-medium mb-1">✅ 다중 업로드 방법:</p>
+                              <p className="font-medium mb-1">✅ 사진 저장 방법:</p>
                               <p>• 사진첩 버튼을 누르세요</p>
                               <p>• 여러 장 선택 후 "완료" 누르기</p>
-                              <p>• iOS에서는 사진마다 개별 업로드됨</p>
+                              <p>• 사진이 기기에 로컬 저장됩니다</p>
                             </div>
                             <div className="bg-white bg-opacity-60 rounded p-2">
-                              <p className="font-medium mb-1">📱 최적화된 방식:</p>
-                              <p>• iOS: 사진 개별 처리 로직 추가</p>
-                              <p>• Android: FormData 배열 사용</p>
-                              <p>• 최대 5장, 각 10MB까지 업로드</p>
+                              <p className="font-medium mb-1">📱 저장 방식:</p>
+                              <p>• 서버 업로드 없이 로컬 저장</p>
+                              <p>• 자동 이미지 압축으로 용량 절약</p>
+                              <p>• 최대 5장, 오프라인 작동 가능</p>
                             </div>
                           </div>
                         </div>
@@ -1044,7 +934,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
             className="w-full flex items-center justify-center gap-2 bg-teal-600 text-white py-3 px-4 rounded-lg text-sm font-medium hover:bg-teal-700 touch-target"
           >
             <Save className="h-5 w-5" />
-            서버 업로드 방식으로 저장하기
+            로컬 저장 방식으로 저장하기
           </button>
         </div>
 
