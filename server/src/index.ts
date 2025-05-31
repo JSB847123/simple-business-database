@@ -14,7 +14,10 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors({
-  origin: '*',
+  origin: function(origin, callback) {
+    // 모든 출처 허용하되 명시적으로 처리
+    callback(null, origin || '*');
+  },
   credentials: true
 }));
 

@@ -315,7 +315,7 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
         body: formDataObj,
         // CORS 문제 해결을 위한 설정
         mode: 'cors',
-        credentials: 'same-origin',
+        credentials: 'include',
         // 네트워크 최적화
         cache: 'no-cache',
         // 타임아웃 방지를 위한 신호 객체 - 60초
@@ -593,6 +593,9 @@ const LocationForm: React.FC<LocationFormProps> = ({ location, onSave, onCancel 
       // 서버에서 삭제
       const response = await fetch(`${API_BASE_URL}/photos/${photoId}`, {
         method: 'DELETE',
+        mode: 'cors',
+        credentials: 'include',
+        cache: 'no-cache'
       });
       
       if (response.ok) {
